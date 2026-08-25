@@ -1,15 +1,55 @@
 {
-  "name": "webssh-ubuntu-desktop",
+  "name": "su-ssh",
   "version": "0.1.0",
-  "description": "Browser-based Ubuntu-style desktop for a remote server, backed entirely by SSH/SFTP.",
+  "description": "A browser desktop for any Linux server, over nothing but SSH: files, terminal, editor, systemd services with live logs, port forwarding, and live CPU/memory/disk/latency meters.",
   "type": "module",
   "main": "server/index.js",
-  "scripts": {
-    "start": "node server/index.js",
-    "dev": "node --watch server/index.js"
+  "bin": {
+    "su-ssh": "bin/cli.js"
   },
-  "engines": { "node": ">=20" },
+  "files": [
+    "bin/",
+    "server/",
+    "public/",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md",
+    ".env.example"
+  ],
+  "scripts": {
+    "start": "node bin/cli.js",
+    "dev": "node --watch bin/cli.js"
+  },
+  "keywords": [
+    "ssh",
+    "sftp",
+    "web-terminal",
+    "remote-desktop",
+    "systemd",
+    "journalctl",
+    "port-forwarding",
+    "ssh-tunnel",
+    "socks5",
+    "server-monitoring",
+    "xterm",
+    "file-manager",
+    "ubuntu",
+    "devops",
+    "sysadmin"
+  ],
+  "author": "Sushil",
   "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sushil3125/su-ssh.git"
+  },
+  "homepage": "https://github.com/Sushil3125/su-ssh#readme",
+  "bugs": {
+    "url": "https://github.com/Sushil3125/su-ssh/issues"
+  },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",

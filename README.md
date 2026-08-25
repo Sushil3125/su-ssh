@@ -1,28 +1,66 @@
-# WebSSH Ubuntu Desktop — v0.1.0 (2026-08-20)
+# su-ssh
 
-A browser-based Ubuntu-style desktop for a remote server. Every file, folder and
-keystroke you see is read live over SSH. Nothing is mirrored, synced or cached
-on the machine running this relay.
+A browser desktop for any Linux server, over nothing but SSH.
 
-Single-user prototype. Read **Security** before putting it anywhere public.
-
----
-
-## Run it
+Files, a real terminal, an editor, systemd service control with live logs, port
+forwarding, and live CPU/memory/disk/latency meters — all read and driven over a
+single SSH connection. Nothing is mirrored, synced or cached on the machine
+running the relay.
 
 ```bash
-npm install
-npm start
+npx su-ssh
 # → http://127.0.0.1:3000
 ```
 
-Open the URL, enter a host, username and credentials, and connect.
+Open the URL, enter a host, username and credentials, and connect. There is no
+agent to install on the target server: if you can `ssh` into it, this works.
+
+> **Read [Security](#security) before putting this anywhere public.** It accepts
+> SSH credentials over plain HTTP and does not verify remote host keys yet.
+> Bind it to localhost (the default) and tunnel in.
+
+---
+
+## What it does
+
+- **Files** — SFTP-backed manager: browse, rename, delete, download, drag-and-drop upload
+- **Terminal** — a real PTY, so `vim`, `htop`, colours, Ctrl-C and tab-completion all work
+- **Editor** — open, edit and save any text file on the server
+- **Services** — search systemd units, stream `journalctl -f`, edit unit files or
+  drop-in overrides, and start/stop/restart/enable/disable/mask
+- **Ports** — local (`-L`), remote (`-R`) and dynamic SOCKS5 (`-D`) tunnels, opened
+  and closed live without reconnecting
+- **Monitor** — CPU, memory, disk space, disk active time and round-trip latency
+  in the top bar, updating every two seconds
+
+---
+
+## Install
+
+```bash
+npx su-ssh                    # run without installing
+npm install -g su-ssh         # or install the command
+su-ssh --port 8080
+```
+
+```
+Options
+  -p, --port <port>     Port to listen on            (default 3000)
+  -H, --host <addr>     Address to bind              (default 127.0.0.1)
+      --jail <path>     Confine file operations below this path
+      --allow-public-forwards
+                        Permit port forwards to bind non-loopback addresses
+```
+
+Requires **Node 20+** on the machine running the relay. The remote server needs
+only `sshd`; systemd features additionally need `systemd` and `journalctl`.
 
 | Variable    | Default     | Purpose |
 |-------------|-------------|---------|
 | `PORT`      | `3000`      | Relay HTTP port |
 | `BIND`      | `127.0.0.1` | Bind address. Localhost by default, on purpose |
 | `ROOT_JAIL` | *(unset)*   | Confine all file operations to this path |
+| `ALLOW_PUBLIC_FORWARDS` | *(unset)* | Allow forwards to bind non-loopback addresses |
 
 Reaching it from another machine — do this rather than setting `BIND=0.0.0.0`:
 

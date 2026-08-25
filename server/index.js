@@ -9,6 +9,7 @@
 
 import http from 'node:http';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 
@@ -37,10 +38,19 @@ app.use(express.json({ limit: '8mb' }));
 /* ------------------------------------------------------------------- static */
 
 app.use(express.static(path.join(ROOT, 'public')));
-// Serve xterm from node_modules so the app works with no internet access.
-app.use('/vendor/xterm', express.static(path.join(ROOT, 'node_modules/@xterm/xterm/lib')));
-app.use('/vendor/xterm-css', express.static(path.join(ROOT, 'node_modules/@xterm/xterm/css')));
-app.use('/vendor/xterm-fit', express.static(path.join(ROOT, 'node_modules/@xterm/addon-fit/lib')));
+
+// xterm is served from disk rather than a CDN so the desktop works on an
+// air-gapped network. The paths are *resolved*, not joined onto our own
+// directory: once this package is installed as a dependency, npm hoists
+// @xterm up to the parent node_modules and `ROOT/node_modules/@xterm` no
+// longer exists. Resolution finds it wherever the installer actually put it.
+const require = createRequire(import.meta.url);
+const xtermRoot = path.dirname(require.resolve('@xterm/xterm/package.json'));
+const fitLib = path.dirname(require.resolve('@xterm/addon-fit'));
+
+app.use('/vendor/xterm', express.static(path.join(xtermRoot, 'lib')));
+app.use('/vendor/xterm-css', express.static(path.join(xtermRoot, 'css')));
+app.use('/vendor/xterm-fit', express.static(fitLib));
 
 /* -------------------------------------------------------------- auth plumbing */
 
