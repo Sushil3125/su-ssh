@@ -36,6 +36,8 @@ async function request(method, url, { body, raw, headers = {} } = {}) {
   if (!res.ok) {
     const err = new Error(isJson ? (payload.error || 'Request failed.') : payload);
     err.status = res.status;
+    // The systemd routes use this to say "retry me with a sudo password".
+    err.needsPassword = isJson && !!payload.needsPassword;
     throw err;
   }
   return payload;
@@ -53,12 +55,37 @@ export const api = {
   mkdir:  (path)        => request('POST', '/api/fs/mkdir', { body: { path } }),
   rename: (from, to)    => request('POST', '/api/fs/rename', { body: { from, to } }),
   remove: (path)        => request('POST', '/api/fs/delete', { body: { path } }),
+  forwards:      ()     => request('GET', '/api/forwards'),
+  addForward:    (spec) => request('POST', '/api/forwards', { body: spec }),
+  closeForward:  (id)   => request('DELETE', `/api/forwards/${encodeURIComponent(id)}`),
+
+  /* systemd. `scope` is 'system' or 'user'; a sudo password, when one is
+     needed, is sent per request and never stored on either side. */
+  services:     (scope)              => request('GET', `/api/services?scope=${scope}`),
+  service:      (unit, scope)        => request('GET', `/api/services/${encodeURIComponent(unit)}?scope=${scope}`),
+  serviceLogs:  (unit, scope, lines) => request('GET', `/api/services/${encodeURIComponent(unit)}/logs?scope=${scope}&lines=${lines}`),
+  unitFile:     (unit, scope, which, password) =>
+    request('GET', `/api/services/${encodeURIComponent(unit)}/file?scope=${scope}&which=${which}`
+      + (password ? `&password=${encodeURIComponent(password)}` : '')),
+  saveUnitFile: (unit, body)         => request('POST', `/api/services/${encodeURIComponent(unit)}/file`, { body }),
+  serviceAction: (unit, action, body) => request('POST', `/api/services/${encodeURIComponent(unit)}/${action}`, { body }),
+  daemonReload: (body)               => request('POST', '/api/daemon-reload', { body }),
+
   upload: (path, buffer) => request('POST', `/api/fs/upload?path=${encodeURIComponent(path)}`, { raw: buffer }),
 
   /** Download and inline-preview URLs carry the token in the query string,
    *  because <img src> and window.open cannot set request headers. */
   downloadUrl: (path) => `/api/fs/download?path=${encodeURIComponent(path)}&token=${encodeURIComponent(token)}`,
   previewUrl:  (path) => `/api/fs/download?inline=1&path=${encodeURIComponent(path)}&token=${encodeURIComponent(token)}`,
+  metricsUrl: (interval) => {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${location.host}/ws/metrics?token=${encodeURIComponent(token)}&interval=${interval}`;
+  },
+  journalUrl: (unit, scope, lines, follow) => {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${location.host}/ws/journal?token=${encodeURIComponent(token)}`
+      + `&unit=${encodeURIComponent(unit)}&scope=${scope}&lines=${lines}&follow=${follow ? 1 : 0}`;
+  },
   terminalUrl: (cols, rows) => {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${proto}//${location.host}/ws/terminal?token=${encodeURIComponent(token)}&cols=${cols}&rows=${rows}`;

@@ -172,11 +172,26 @@ function toggleMax(id) {
   win.onResize?.();
 }
 
-export function closeWindow(id) {
+/**
+ * A window can veto its own close (the editor does, for unsaved changes).
+ * `onClose` may be async, because the confirmation it shows is a real dialog
+ * rather than the browser's blocking `confirm`. `force` skips the veto, for
+ * teardown paths like disconnecting where a prompt would be in the way.
+ */
+export async function closeWindow(id, { force = false } = {}) {
   const win = windows.get(id);
-  if (!win) return;
-  // A window can veto its own close (the editor uses this for unsaved changes).
-  if (win.onClose?.() === false) return;
+  if (!win || win.closing) return;
+
+  if (!force) {
+    win.closing = true;   // A second click while the dialog is up must not stack.
+    try {
+      if (await win.onClose?.() === false) return;
+    } finally {
+      win.closing = false;
+    }
+    if (!windows.has(id)) return;  // Closed underneath us while we waited.
+  }
+
   win.el.remove();
   win.task.remove();
   windows.delete(id);
@@ -186,7 +201,7 @@ export function closeWindow(id) {
 }
 
 export function closeAll() {
-  for (const id of [...windows.keys()]) closeWindow(id);
+  for (const id of [...windows.keys()]) closeWindow(id, { force: true });
 }
 
 function markDockRunning(appId, running) {

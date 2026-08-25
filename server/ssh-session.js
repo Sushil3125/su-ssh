@@ -27,6 +27,8 @@ class Session {
     this.meta = meta;          // host, port, username, authMethod, home, connectedAt
     this.sftp = null;
     this.channels = new Set(); // open shell channels, so we can clean up on disconnect
+    this.forwards = new Map(); // id -> Forward, see port-forward.js
+    this.remoteRouterAttached = false;
   }
 
   /**
@@ -47,8 +49,14 @@ class Session {
     return this.sftp;
   }
 
-  /** Run a command and collect stdout/stderr. Used only for system info. */
-  exec(command) {
+  /**
+   * Run a command and collect stdout/stderr.
+   *
+   * `stdin` is written and the stream closed immediately, which is how a sudo
+   * password is delivered without it ever appearing in the command line — and
+   * therefore without it appearing in the remote host's process list.
+   */
+  exec(command, { stdin = null } = {}) {
     return new Promise((resolve, reject) => {
       this.conn.exec(command, (err, stream) => {
         if (err) return reject(err);
@@ -56,11 +64,38 @@ class Session {
         stream.on('data', (d) => { stdout += d.toString('utf8'); });
         stream.stderr.on('data', (d) => { stderr += d.toString('utf8'); });
         stream.on('close', (code) => resolve({ code, stdout, stderr }));
+        if (stdin !== null) stream.end(stdin);
+      });
+    });
+  }
+
+  /**
+   * Start a long-running command and hand back the live channel.
+   *
+   * A PTY is requested on purpose. OpenSSH does not implement the SSH "signal"
+   * channel request, so `stream.signal('TERM')` is silently ignored and a
+   * `journalctl -f` would keep running on the server after the browser tab
+   * closed. With a PTY, closing the channel hangs up the terminal and systemd's
+   * own SIGHUP handling reaps the process — the same thing that happens when
+   * you close a real terminal window.
+   */
+  execStream(command, { pty = true, stdin = null } = {}) {
+    return new Promise((resolve, reject) => {
+      this.conn.exec(command, { pty: pty ? { term: 'dumb', cols: 200, rows: 50 } : false }, (err, stream) => {
+        if (err) return reject(err);
+        this.channels.add(stream);
+        stream.on('close', () => this.channels.delete(stream));
+        if (stdin !== null) stream.write(stdin);
+        resolve(stream);
       });
     });
   }
 
   destroy() {
+    // Listeners first: a forward left bound would survive the SSH connection
+    // and keep a port on this host occupied with nothing behind it.
+    for (const fwd of this.forwards.values()) { try { fwd.stop(); } catch { /* already gone */ } }
+    this.forwards.clear();
     for (const ch of this.channels) { try { ch.end(); } catch { /* already gone */ } }
     this.channels.clear();
     try { this.conn.end(); } catch { /* already gone */ }
@@ -199,7 +234,11 @@ export async function connect(input) {
     sftp.realpath('.', (err, absPath) => resolve(err ? `/home/${config.username}` : absPath));
   });
 
-  conn.on('close', () => sessions.delete(token));
+  conn.on('close', () => {
+    for (const fwd of session.forwards.values()) { try { fwd.stop(); } catch { /* already gone */ } }
+    session.forwards.clear();
+    sessions.delete(token);
+  });
 
   sessions.set(token, session);
   return session;

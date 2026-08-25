@@ -14,7 +14,16 @@ import express from 'express';
 
 import { connect, getSession, HttpError } from './ssh-session.js';
 import { fsRouter } from './routes-fs.js';
-import { attachTerminal } from './terminal-ws.js';
+import { createForward, listForwards, removeForward } from './port-forward.js';
+import { terminalRoute } from './terminal-ws.js';
+import { journalRoute } from './journal-ws.js';
+import { metricsRoute } from './metrics-ws.js';
+import { attachWebSockets } from './ws-router.js';
+import {
+  listServices, showService, runAction, daemonReload,
+  readUnitFile, writeUnitFile, journalSnapshot, probePrivilege,
+  assertScope, ACTION_LABELS,
+} from './services.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -47,7 +56,22 @@ app.post('/api/connect', async (req, res, next) => {
   try {
     const session = await connect(req.body);
     console.log(`[connect] ${session.meta.username}@${session.meta.host}:${session.meta.port} via ${session.meta.authMethod}`);
-    res.json({ token: session.token, ...session.meta });
+
+    // Forwards requested on the login screen are opened here, one by one. A
+    // forward that cannot bind is reported rather than thrown: losing the whole
+    // session because port 8080 was taken would be a poor trade.
+    const pending = Array.isArray(req.body.forwards) ? req.body.forwards.slice(0, 20) : [];
+    const forwards = [];
+    for (const spec of pending) {
+      try {
+        forwards.push((await createForward(session, spec)).toJSON());
+      } catch (err) {
+        forwards.push({ ...spec, status: 'error', error: err.message });
+        console.warn(`[forward] ${err.message}`);
+      }
+    }
+
+    res.json({ token: session.token, ...session.meta, forwards });
   } catch (err) { next(err); }
 });
 
@@ -104,22 +128,125 @@ app.get('/api/system', readToken, async (req, res, next) => {
 
 app.use('/api/fs', readToken, fsRouter);
 
+/* ------------------------------------------------------------ port forwards */
+
+app.get('/api/forwards', readToken, (req, res, next) => {
+  try {
+    res.json({ forwards: listForwards(getSession(req.sessionToken)) });
+  } catch (err) { next(err); }
+});
+
+app.post('/api/forwards', readToken, async (req, res, next) => {
+  try {
+    const session = getSession(req.sessionToken);
+    const forward = await createForward(session, req.body);
+    console.log(`[forward] opened ${forward.toJSON().description}`);
+    res.json(forward.toJSON());
+  } catch (err) { next(err); }
+});
+
+app.delete('/api/forwards/:id', readToken, async (req, res, next) => {
+  try {
+    const session = getSession(req.sessionToken);
+    const forward = await removeForward(session, req.params.id);
+    console.log(`[forward] closed ${forward.description}`);
+    res.json({ closed: true, forward });
+  } catch (err) { next(err); }
+});
+
+/* ---------------------------------------------------------------- services */
+
+/** Scope and unit arrive on nearly every call; read them in one place. */
+function serviceCtx(req) {
+  return {
+    session: getSession(req.sessionToken),
+    scope: assertScope(req.query.scope || req.body?.scope || 'system'),
+  };
+}
+
+app.get('/api/services', readToken, async (req, res, next) => {
+  try {
+    const { session, scope } = serviceCtx(req);
+    const [list, privilege] = await Promise.all([listServices(session, scope), probePrivilege(session)]);
+    res.json({ ...list, privilege, actions: ACTION_LABELS });
+  } catch (err) { next(err); }
+});
+
+app.get('/api/services/:unit', readToken, async (req, res, next) => {
+  try {
+    const { session, scope } = serviceCtx(req);
+    res.json(await showService(session, scope, req.params.unit));
+  } catch (err) { next(err); }
+});
+
+app.get('/api/services/:unit/logs', readToken, async (req, res, next) => {
+  try {
+    const { session, scope } = serviceCtx(req);
+    res.json(await journalSnapshot(session, scope, req.params.unit, req.query.lines));
+  } catch (err) { next(err); }
+});
+
+app.get('/api/services/:unit/file', readToken, async (req, res, next) => {
+  try {
+    const { session, scope } = serviceCtx(req);
+    res.json(await readUnitFile(session, scope, req.params.unit, req.query.which, req.query.password));
+  } catch (err) { next(err); }
+});
+
+app.post('/api/services/:unit/file', readToken, async (req, res, next) => {
+  try {
+    const { session, scope } = serviceCtx(req);
+    const result = await writeUnitFile(
+      session, scope, req.params.unit,
+      req.body.path, req.body.content, req.body.password,
+      { reload: req.body.reload !== false },
+    );
+    console.log(`[systemd] wrote ${result.path}`);
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
+app.post('/api/services/:unit/:action', readToken, async (req, res, next) => {
+  try {
+    const { session, scope } = serviceCtx(req);
+    const result = await runAction(session, scope, req.params.unit, req.params.action, req.body.password);
+    console.log(`[systemd] ${scope} ${req.params.action} ${result.unit}`);
+    // The caller almost always wants the new state, and asking for it here
+    // saves a round trip during which the UI would show the old one.
+    res.json({ ...result, detail: await showService(session, scope, result.unit) });
+  } catch (err) { next(err); }
+});
+
+app.post('/api/daemon-reload', readToken, async (req, res, next) => {
+  try {
+    const { session, scope } = serviceCtx(req);
+    res.json(await daemonReload(session, scope, req.body.password));
+  } catch (err) { next(err); }
+});
+
 /* ------------------------------------------------------------- error handler */
 
 app.use((err, _req, res, _next) => {
   const status = err instanceof HttpError ? err.status : (err.status || 500);
   if (status >= 500) console.error('[error]', err);
-  res.status(status).json({ error: err.message || 'Something went wrong.' });
+  // needsPassword tells the browser to ask for a sudo password and retry,
+  // rather than reporting a dead end the user cannot act on.
+  res.status(status).json({ error: err.message || 'Something went wrong.', needsPassword: !!err.needsPassword });
 });
 
 /* -------------------------------------------------------------------- listen */
 
 const server = http.createServer(app);
-attachTerminal(server);
+attachWebSockets(server, {
+  '/ws/terminal': terminalRoute,
+  '/ws/journal': journalRoute,
+  '/ws/metrics': metricsRoute,
+});
 
 server.listen(PORT, HOST, () => {
   console.log(`\n  Web desktop relay listening on http://${HOST}:${PORT}`);
   console.log(`  Bound to ${HOST}. Set BIND=0.0.0.0 to expose it, but read the security notes first.`);
+  if (process.env.ALLOW_PUBLIC_FORWARDS === '1') console.log('  Port forwards may bind non-loopback addresses.');
   if (process.env.ROOT_JAIL) console.log(`  Path jail active: ${process.env.ROOT_JAIL}`);
   console.log('');
 });

@@ -96,7 +96,14 @@ public/
 - Text editor with `Ctrl-S`, unsaved-changes guard, binary-file detection
 - Full interactive terminal with working resize
 - Image viewer
+- Services: search systemd units, stream `journalctl -f` live, edit the unit
+  file or a drop-in override, and start/stop/restart/enable/disable/mask
+- Port forwarding: local (`-L`), remote (`-R`) and dynamic SOCKS5 (`-D`),
+  queued on the greeter or added and closed live from the Ports app
 - Window manager: drag, resize, focus, minimise, maximise, dock task list
+- Live top-bar meters: CPU, memory, disk space, disk active time, and the
+  browser→relay→server round trip
+- Recent connections on the greeter, with relative times and pinning
 - Session survives a page refresh; `Disconnect` tears everything down
 - Responsive below 720px (the dock moves to the bottom)
 
@@ -125,7 +132,14 @@ This prototype is honest about its position: it is a shell exposed over HTTP.
 - No shell interpolation anywhere in the file layer — SFTP only
 - Refuses to delete `/` or the home directory
 - Binds to localhost by default
+- systemd actions run under `sudo -S` with the password on stdin, so it never
+  appears in the remote process list; nothing caches it, and unit-file writes
+  are confined to the systemd unit directories
+- Port forwards refuse a non-loopback bind unless `ALLOW_PUBLIC_FORWARDS=1`, and
+  every forward dies with the session that created it
 - Passwords and keys are cleared from the DOM once the connection is up
+- The recent-connections list stores only host, port, username and auth method
+  — never a credential
 
 **Not in place — needed before this is exposed**
 

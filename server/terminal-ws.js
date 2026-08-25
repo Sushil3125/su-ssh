@@ -12,46 +12,15 @@
  * happens to look like JSON.
  */
 
-import { WebSocketServer } from 'ws';
-import { getSession } from './ssh-session.js';
-
-export function attachTerminal(server) {
-  const wss = new WebSocketServer({ noServer: true });
-
-  server.on('upgrade', (request, socket, head) => {
-    const url = new URL(request.url, 'http://localhost');
-    if (url.pathname !== '/ws/terminal') return socket.destroy();
-
-    // The browser cannot set headers on a WebSocket handshake, so the session
-    // token rides in the query string. Over TLS that is acceptable; just be
-    // aware it can land in proxy access logs, so keep tokens short-lived.
-    const token = url.searchParams.get('token');
-    try {
-      getSession(token);
-    } catch {
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-      return socket.destroy();
-    }
-
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      openShell(ws, token, {
-        cols: Number(url.searchParams.get('cols')) || 80,
-        rows: Number(url.searchParams.get('rows')) || 24,
-      });
-    });
+/** Registered on /ws/terminal by ws-router.js, which has already authenticated. */
+export function terminalRoute(ws, session, url) {
+  openShell(ws, session, {
+    cols: Number(url.searchParams.get('cols')) || 80,
+    rows: Number(url.searchParams.get('rows')) || 24,
   });
-
-  return wss;
 }
 
-function openShell(ws, token, size) {
-  let session;
-  try {
-    session = getSession(token);
-  } catch {
-    return ws.close(4001, 'Session expired');
-  }
-
+function openShell(ws, session, size) {
   session.conn.shell(
     { term: 'xterm-256color', cols: size.cols, rows: size.rows },
     (err, stream) => {

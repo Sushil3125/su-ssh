@@ -2,7 +2,8 @@
 
 import { api } from './api.js';
 import { createWindow, escapeHtml } from './wm.js';
-import { toast, contextMenu, formatBytes, formatDate, GLYPH } from './ui.js';
+import { toast, contextMenu, confirmDialog, promptDialog, formatBytes, formatDate, GLYPH } from './ui.js';
+import { forwardFormHtml, wireForwardForm, forwardRowHtml } from './forwards.js';
 
 const basename = (p) => p.split('/').filter(Boolean).pop() || '/';
 const dirname = (p) => {
@@ -127,7 +128,12 @@ export function openFiles(startPath = '~') {
   }
 
   async function doRename(entry) {
-    const next = prompt('New name', entry.name);
+    const next = await promptDialog({
+      title: `Rename ${entry.isDirectory ? 'folder' : 'file'}`,
+      label: 'New name',
+      value: entry.name,
+      confirmLabel: 'Rename',
+    });
     if (!next || next === entry.name) return;
     if (next.includes('/')) return toast('A name cannot contain a slash.', 'bad');
     try {
@@ -138,10 +144,13 @@ export function openFiles(startPath = '~') {
   }
 
   async function doDelete(entry) {
-    const warning = entry.isDirectory
-      ? `Delete the folder "${entry.name}" and everything inside it?`
-      : `Delete "${entry.name}"?`;
-    if (!confirm(`${warning}\n\nThis removes it on the server and cannot be undone.`)) return;
+    const ok = await confirmDialog({
+      title: entry.isDirectory ? `Delete "${entry.name}" and its contents?` : `Delete "${entry.name}"?`,
+      message: 'This removes it on the server and cannot be undone.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.remove(entry.path);
       toast(`Deleted ${entry.name}`, 'good');
@@ -176,7 +185,7 @@ export function openFiles(startPath = '~') {
     if (action === 'refresh') return go(current, { push: false });
     if (action === 'upload') return picker.click();
     if (action === 'mkdir') {
-      const name = prompt('Folder name');
+      const name = await promptDialog({ title: 'New folder', label: 'Folder name', placeholder: 'projects', confirmLabel: 'Create' });
       if (!name) return;
       try {
         await api.mkdir(joinPath(current, name));
@@ -298,9 +307,14 @@ export function openEditor(filePath = null) {
     }
   });
 
-  win.onClose = () => {
-    if (dirty && !confirm('You have unsaved changes. Close anyway?')) return false;
-    return true;
+  win.onClose = async () => {
+    if (!dirty) return true;
+    return confirmDialog({
+      title: 'Discard unsaved changes?',
+      message: `${pathInput.value || 'This file'} has edits that have not been written to the server.`,
+      confirmLabel: 'Discard',
+      danger: true,
+    });
   };
 
   if (filePath) load(filePath);
@@ -398,5 +412,67 @@ export function openViewer(filePath) {
   img.addEventListener('error', () => {
     win.body.querySelector('.viewer').innerHTML = '<div class="empty"><strong>Cannot display this image</strong>The file may be corrupt or unreadable.</div>';
   });
+  return win;
+}
+
+/* ═════════════════════════════════════════════════════ port forwarding ═══ */
+
+/**
+ * The Ports app. Forwards are created and closed against the live session, so
+ * everything here takes effect immediately — no reconnect, no restart.
+ *
+ * The list refreshes on a timer rather than a push channel: the only thing
+ * that changes on its own is the traffic counter, and two seconds of lag on a
+ * byte count is not worth a second WebSocket.
+ */
+export function openForwards() {
+  const win = createWindow({ title: 'Port forwarding', icon: '🔀', width: 720, height: 560, appId: 'ports' });
+
+  win.body.innerHTML = `
+    <div class="fwd-app">
+      <div class="fwd-app__list" data-role="list"><p class="fwd-empty">No forwards yet.</p></div>
+      <div class="fwd-app__new">
+        <h3 class="fwd-app__h">New forward</h3>
+        ${forwardFormHtml()}
+      </div>
+    </div>`;
+
+  const list = win.body.querySelector('[data-role="list"]');
+  let timer = null;
+
+  async function refresh() {
+    try {
+      const { forwards } = await api.forwards();
+      win.setSubtitle(`— ${forwards.filter((f) => f.status === 'active').length} active`);
+      list.innerHTML = forwards.length
+        ? forwards.map((f) => forwardRowHtml(f)).join('')
+        : '<p class="fwd-empty">No forwards yet. Add one below — it opens straight away.</p>';
+    } catch (err) {
+      list.innerHTML = `<p class="fwd-empty">${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  list.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-act="remove"]');
+    if (!btn) return;
+    const id = btn.closest('.fwd-row').dataset.id;
+    try {
+      await api.closeForward(id);
+      toast('Forward closed.', 'good');
+    } catch (err) {
+      toast(err.message, 'bad');
+    }
+    refresh();
+  });
+
+  wireForwardForm(win.body.querySelector('.fwd-form'), async (spec) => {
+    const fwd = await api.addForward(spec);
+    toast(`Forward open: ${fwd.description}`, 'good');
+    refresh();
+  });
+
+  refresh();
+  timer = setInterval(refresh, 2000);
+  win.onClose = () => { clearInterval(timer); };  // The forwards themselves keep running.
   return win;
 }

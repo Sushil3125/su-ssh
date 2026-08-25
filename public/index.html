@@ -21,6 +21,14 @@
       <p>Everything you see next is read live over SSH. Nothing is cached on this machine.</p>
     </header>
 
+    <section class="recents is-hidden" id="recents" aria-label="Recent connections">
+      <div class="recents__head">
+        <span>Recent connections</span>
+        <button type="button" class="recents__clear" id="recents-clear">Clear unpinned</button>
+      </div>
+      <div class="recents__list" id="recents-list"></div>
+    </section>
+
     <div class="field-row">
       <label class="field field--grow">
         <span>Host</span>
@@ -86,6 +94,14 @@
         <code>ssh-add -l</code>, this will work.</p>
     </div>
 
+    <details class="greeter__fold" id="fwd-fold">
+      <summary>Port forwarding <em>optional</em> <span class="greeter__count" id="fwd-count"></span></summary>
+      <p class="hint hint--block">Queue tunnels now and they open the moment the session comes up. You can add,
+        change or close them at any time afterwards from the Ports app.</p>
+      <div id="fwd-queue" class="fwd-list"></div>
+      <div id="fwd-greeter-form"></div>
+    </details>
+
     <p id="connect-error" class="alert is-hidden" role="alert"></p>
 
     <button type="submit" class="btn btn--primary btn--full" id="connect-btn">
@@ -104,6 +120,7 @@
     <div class="topbar__left">
       <span class="dot dot--live" id="link-dot"></span>
       <span id="topbar-conn">—</span>
+      <div class="sysmon is-hidden" id="sysmon" aria-label="System monitor"></div>
     </div>
     <div class="topbar__centre" id="topbar-clock">—</div>
     <div class="topbar__right">
@@ -121,6 +138,14 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="4" width="19" height="16" rx="2"/><path d="M6.5 9.5l3 2.5-3 2.5M12.5 15h5" stroke="#2C001E" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <span class="dock__label">Terminal</span>
     </button>
+    <button class="dock__item" data-launch="ports" title="Port forwarding">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h7a4 4 0 014 4v8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M4 18h7a4 4 0 004-4V6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="19" cy="6" r="2.4"/><circle cx="19" cy="18" r="2.4"/></svg>
+      <span class="dock__label">Ports</span>
+    </button>
+    <button class="dock__item" data-launch="services" title="Services">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="1.6"/><rect x="3" y="14" width="18" height="6" rx="1.6"/><circle cx="7" cy="7" r="1.1" fill="#2C001E"/><circle cx="7" cy="17" r="1.1" fill="#2C001E"/></svg>
+      <span class="dock__label">Services</span>
+    </button>
     <button class="dock__item" data-launch="editor" title="Text editor">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l5 5v13a1 1 0 01-1 1H6a1 1 0 01-1-1V4a1 1 0 011-1z"/><path d="M14 3v5h5" fill="#2C001E"/></svg>
       <span class="dock__label">Editor</span>
@@ -135,9 +160,13 @@
   </main>
 
   <div class="windows" id="windows"></div>
-  <div class="ctxmenu is-hidden" id="ctxmenu"></div>
-  <div class="toasts" id="toasts"></div>
 </div>
+
+<!-- Overlays live outside #shell on purpose: the greeter also raises toasts and
+     dialogs, and #shell is display:none until a session exists. -->
+<div class="ctxmenu is-hidden" id="ctxmenu"></div>
+<div class="toasts" id="toasts"></div>
+<div id="modals"></div>
 
 <script src="/vendor/xterm/xterm.js"></script>
 <script src="/vendor/xterm-fit/addon-fit.js"></script>
