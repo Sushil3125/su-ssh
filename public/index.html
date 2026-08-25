@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Remote Desktop over SSH</title>
+<link rel="stylesheet" href="/vendor/xterm-css/xterm.css">
+<link rel="stylesheet" href="/css/desktop.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23E95420'/></svg>">
+</head>
+<body>
+
+<!-- ─────────────────────────────── greeter ─────────────────────────────── -->
+<div id="greeter" class="greeter">
+  <div class="greeter__glow" aria-hidden="true"></div>
+
+  <form id="connect-form" class="greeter__card" autocomplete="off">
+    <header class="greeter__head">
+      <div class="greeter__mark" aria-hidden="true"><span></span><span></span><span></span></div>
+      <h1>Connect to a server</h1>
+      <p>Everything you see next is read live over SSH. Nothing is cached on this machine.</p>
+    </header>
+
+    <div class="field-row">
+      <label class="field field--grow">
+        <span>Host</span>
+        <input name="host" id="f-host" placeholder="192.168.1.20 or example.com" required>
+      </label>
+      <label class="field field--port">
+        <span>Port</span>
+        <input name="port" id="f-port" value="22" inputmode="numeric">
+      </label>
+    </div>
+
+    <label class="field">
+      <span>Username</span>
+      <input name="username" id="f-username" placeholder="ubuntu" required>
+    </label>
+
+    <fieldset class="field">
+      <span class="field__legend">Authentication</span>
+      <div class="segmented" role="tablist" id="auth-tabs">
+        <button type="button" role="tab" class="segmented__btn is-active" data-auth="password">Password</button>
+        <button type="button" role="tab" class="segmented__btn" data-auth="key">Private key</button>
+        <button type="button" role="tab" class="segmented__btn" data-auth="keyfile">Key file</button>
+        <button type="button" role="tab" class="segmented__btn" data-auth="agent">Agent</button>
+      </div>
+    </fieldset>
+
+    <div class="auth-pane" data-pane="password">
+      <label class="field">
+        <span>Password</span>
+        <input type="password" name="password" id="f-password" placeholder="Sent once, held in memory only">
+      </label>
+    </div>
+
+    <div class="auth-pane is-hidden" data-pane="key">
+      <label class="field">
+        <span>Private key</span>
+        <textarea name="privateKey" id="f-privatekey" rows="5"
+          placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;…"></textarea>
+      </label>
+      <label class="field">
+        <span>Passphrase <em>optional</em></span>
+        <input type="password" name="passphrase" id="f-passphrase" placeholder="Leave blank if the key is not encrypted">
+      </label>
+      <p class="hint">Or drop a key file here — it is read in the browser and never written to disk.
+        <input type="file" id="f-keyupload" class="file-input"></p>
+    </div>
+
+    <div class="auth-pane is-hidden" data-pane="keyfile">
+      <label class="field">
+        <span>Key path on this machine</span>
+        <input name="privateKeyPath" id="f-keypath" placeholder="/home/you/.ssh/id_ed25519">
+      </label>
+      <label class="field">
+        <span>Passphrase <em>optional</em></span>
+        <input type="password" name="passphrase2" id="f-passphrase2">
+      </label>
+      <p class="hint">The path is resolved by the relay process, not by your browser.</p>
+    </div>
+
+    <div class="auth-pane is-hidden" data-pane="agent">
+      <p class="hint hint--block">Uses the ssh-agent already running where the relay lives, via
+        <code>SSH_AUTH_SOCK</code>. No credential is typed, sent, or stored. If your key is in
+        <code>ssh-add -l</code>, this will work.</p>
+    </div>
+
+    <p id="connect-error" class="alert is-hidden" role="alert"></p>
+
+    <button type="submit" class="btn btn--primary btn--full" id="connect-btn">
+      <span class="btn__label">Connect</span>
+      <span class="spinner" aria-hidden="true"></span>
+    </button>
+
+    <p class="greeter__foot">Prototype build — bind to localhost and tunnel in. See the README before exposing this.</p>
+  </form>
+</div>
+
+<!-- ─────────────────────────────── desktop ─────────────────────────────── -->
+<div id="shell" class="shell is-hidden">
+
+  <div class="topbar">
+    <div class="topbar__left">
+      <span class="dot dot--live" id="link-dot"></span>
+      <span id="topbar-conn">—</span>
+    </div>
+    <div class="topbar__centre" id="topbar-clock">—</div>
+    <div class="topbar__right">
+      <span id="topbar-sys" class="topbar__sys">—</span>
+      <button class="topbar__btn" id="btn-disconnect" title="Disconnect">Disconnect</button>
+    </div>
+  </div>
+
+  <nav class="dock" id="dock" aria-label="Applications">
+    <button class="dock__item" data-launch="files" title="Files">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 014.5 5h4l2 2.2h9A1.5 1.5 0 0121 8.7v9.8a1.5 1.5 0 01-1.5 1.5h-15A1.5 1.5 0 013 18.5z"/></svg>
+      <span class="dock__label">Files</span>
+    </button>
+    <button class="dock__item" data-launch="terminal" title="Terminal">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="4" width="19" height="16" rx="2"/><path d="M6.5 9.5l3 2.5-3 2.5M12.5 15h5" stroke="#2C001E" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="dock__label">Terminal</span>
+    </button>
+    <button class="dock__item" data-launch="editor" title="Text editor">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l5 5v13a1 1 0 01-1 1H6a1 1 0 01-1-1V4a1 1 0 011-1z"/><path d="M14 3v5h5" fill="#2C001E"/></svg>
+      <span class="dock__label">Editor</span>
+    </button>
+    <div class="dock__rule"></div>
+    <div class="dock__running" id="dock-running"></div>
+  </nav>
+
+  <main class="desktop" id="desktop">
+    <div class="desktop__icons" id="desktop-icons"></div>
+    <div class="desktop__hint" id="desktop-hint">Reading ~/Desktop over SFTP…</div>
+  </main>
+
+  <div class="windows" id="windows"></div>
+  <div class="ctxmenu is-hidden" id="ctxmenu"></div>
+  <div class="toasts" id="toasts"></div>
+</div>
+
+<script src="/vendor/xterm/xterm.js"></script>
+<script src="/vendor/xterm-fit/addon-fit.js"></script>
+<script type="module" src="/js/main.js"></script>
+</body>
+</html>
