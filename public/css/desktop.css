@@ -587,7 +587,11 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 
 .dock {
   position: absolute;
-  inset: var(--topbar-h) auto 0 0;
+  /* Left edge sits AFTER the host rail. Both started at 0 when the rail was
+     added, and since the rail is drawn on top it hid 60 of the dock's 72px —
+     the app launchers were unreachable on any screen wide enough to show the
+     rail vertically. The window area has always been offset by both widths. */
+  inset: var(--topbar-h) auto 0 var(--rail-w);
   z-index: 850;
   display: flex;
   flex-direction: column;
