@@ -46,6 +46,56 @@
   forward close buttons (which now name the endpoints, not just "Close").
 - Attribution and the upstream licence ship with the package: see
   `public/icons/LICENSE.lucide.txt` and the Credits section of the README.
+### Keyboard — the browser stops eating the terminal's keys
+- **Nano and vi get their chords back, with nothing to turn on.** While a
+  terminal has focus, `Ctrl+A/B/D/E/F/G/H/J/K/L/O/P/R/S/U/X/Y` are
+  `preventDefault()`ed at the window, so they reach the PTY instead of opening
+  Find, Downloads, History, the address bar or a bookmark dialog. The event is
+  *not* stopped, only defaulted, so xterm still sees it and still writes the
+  control byte. Verified end to end: each byte was dispatched as a real key
+  through CDP and read back out of a `cat -v` running on the far side of a pty.
+- **Selection-aware `Ctrl+C`.** With a selection it copies and clears the
+  selection; with nothing selected it is SIGINT exactly as before. xterm has no
+  such rule of its own — it sends ETX unconditionally.
+- **`Ctrl+Shift+C` / `Ctrl+Shift+V`,** and a right-click menu in the terminal
+  with Copy / Paste / Select all / Clear. Both paste paths that can raise the
+  browser's clipboard-read prompt duplicate paths that cannot (`Ctrl+V`,
+  `Shift+Insert`, middle-click), so denying the permission costs nothing.
+- **"Capture keys" (`Alt+Shift+K`, or the top-bar chip)** — JS-initiated
+  fullscreen plus `navigator.keyboard.lock()`. The only mechanism that recovers
+  `Ctrl+W`, `Ctrl+T` and `Ctrl+N`, and Chromium-only. `Escape` is in the locked
+  set on purpose: a tap reaches the terminal, a two-second hold leaves. The chip
+  is painted from `fullscreenchange` and never from its own click, so it cannot
+  report a capture that failed; a half-entered state is rolled back. On Firefox
+  and Safari, where the API has never existed, the control says so instead of
+  failing silently.
+- **A keyboard panel, `Alt+Shift+H`** (or `F1` when a terminal does *not* have
+  focus — nano owns `F1`). Lists the app's shortcuts, what capture does, the
+  copy/paste table, and, honestly, which combinations each browser keeps for
+  itself. That table is read from Chromium's `IsReservedCommandOrKey` and
+  Firefox's `reserved="true"` keyset, not guessed.
+- **A scoped `beforeunload` guard.** Registered only while a connected session
+  has at least one terminal window open, and removed the moment it does not, so
+  a mistyped `Ctrl+W` costs a dialog rather than a root shell — and the greeter
+  never nags.
+- **A web app manifest**, so Chrome and Edge offer "Install su-ssh…". A Chromium
+  app window reserves nothing at all, which is a second route to `Ctrl+W`.
+- **Deliberately no service worker,** and the reasoning is written into the
+  README so nobody adds one "for the PWA" later. A stale cached `main.js` served
+  against a freshly upgraded relay breaks the WebSocket protocol and the session
+  token format in a tool that holds live root shells, and the user's instinctive
+  fix — a hard reload — is exactly what a service worker survives. Nothing is
+  gained: install has not needed one since Chrome 112.
+- The comment in `rail.js` claiming `Ctrl+1..9` and `Ctrl+K` cannot be
+  intercepted is corrected: both *are* preventable in both browsers. They remain
+  the wrong choice for app shortcuts, for the reasons now written there.
+
+**Not verified, and not claimed.** Whether Keyboard Lock actually captures
+`Ctrl+W` cannot be shown in a headless browser: there is no browser chrome and
+no OS-level window to hook, and `lock()` rejects with `InvalidStateError`
+whatever the code does. The API surface, the secure-context requirement, the
+argument validation and the rollback path are all tested; the capture itself
+needs a headed Chrome on a real desktop.
 
 ### Multi-session switching
 - **Several servers in one tab.** A host rail sits left of the app dock with one

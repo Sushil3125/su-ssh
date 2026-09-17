@@ -5,6 +5,7 @@ import { contextMenu, confirmDialog, promptDialog, promptSecret, formatBytes, fo
 import { icon, iconButton } from './icon.js';
 import { forwardFormHtml, wireForwardForm, forwardRowHtml } from './forwards.js';
 import { requireSession, hostPhrase, dangerOpts, markActivity, markDropped } from './sessions.js';
+import { copySelection, pasteFromClipboard, hintOnce } from './keyboard.js';
 
 const basename = (p) => p.split('/').filter(Boolean).pop() || '/';
 const dirname = (p) => {
@@ -420,13 +421,77 @@ export function openTerminal(cwd = null) {
   term.loadAddon(fit);
   term.open(host);
 
-  // xterm swallows almost every chord while focused, so the session shortcuts
-  // are taken away from it explicitly. Returning false stops xterm processing
-  // the event AND stops it reaching the PTY; the window-level capture handler
-  // in main.js has already acted on it. Everything else — Ctrl+C, Ctrl+D,
-  // Alt+B, Alt+F, Alt+. — is untouched and still goes to the shell.
-  term.attachCustomKeyEventHandler((e) => !(e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey
-    && (/^Digit[1-8]$/.test(e.code) || ['BracketLeft', 'BracketRight', 'KeyN'].includes(e.code))));
+  /**
+   * One handler, three jobs, in this order:
+   *   1. app chords (Alt+Shift+…) — already acted on at window level in main.js;
+   *      here we only stop them also reaching the PTY.
+   *   2. the clipboard chords xterm has no binding for.
+   *   3. everything else → straight to the PTY, untouched.
+   *
+   * Returning false means "xterm must not process this AND must not send it".
+   * Everything not named below — Ctrl+C without a selection, Ctrl+D, Ctrl+K,
+   * Alt+B, Alt+F, Alt+. — is untouched and still goes to the shell. The
+   * window-level handler in keyboard.js has already stopped the *browser*
+   * acting on the Ctrl chords, without stopping their propagation to here.
+   */
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.type !== 'keydown') return true;
+
+    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey
+      && (/^Digit[1-8]$/.test(e.code)
+        || ['BracketLeft', 'BracketRight', 'KeyN', 'KeyK', 'KeyH'].includes(e.code))) {
+      return false;
+    }
+
+    const modKey = navigator.platform?.startsWith?.('Mac') ? e.metaKey : e.ctrlKey;
+
+    // Windows-Terminal semantics, and the half of the complaint that needs no
+    // mode: with a selection Ctrl+C copies, with none it is SIGINT — which is
+    // the only reason anyone presses it in a terminal. xterm has no such rule;
+    // it sends ETX unconditionally and never fires a `copy` event.
+    if (modKey && !e.shiftKey && !e.altKey && e.code === 'KeyC' && term.hasSelection()) {
+      copySelection(term);
+      e.preventDefault();
+      return false;
+    }
+
+    // Muscle memory from GNOME Terminal and Windows Terminal. Redundant with
+    // the rule above by design, because the devtools chord is not guaranteed
+    // preventable in every browser and this must never be the only copy path.
+    if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyC') {
+      copySelection(term);
+      e.preventDefault();
+      return false;
+    }
+
+    // Ctrl+V and Shift+Insert are deliberately NOT here: xterm's own DOM
+    // `paste` handler does those with bracketed paste and no permission
+    // prompt. This chord is the extra, never the path.
+    if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyV') {
+      pasteFromClipboard(term);
+      e.preventDefault();
+      return false;
+    }
+
+    return true;
+  });
+
+  // A right-click menu that names the gestures, so the two entries that can
+  // raise a clipboard prompt are never the only way to reach either action.
+  host.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    contextMenu(e.clientX, e.clientY, [
+      { label: 'Copy', onClick: () => copySelection(term) },
+      { label: 'Paste', onClick: () => pasteFromClipboard(term) },
+      'separator',
+      { label: 'Select all', onClick: () => { term.selectAll(); term.focus(); } },
+      { label: 'Clear', onClick: () => { term.clear(); term.focus(); } },
+    ]);
+  });
+
+  // Said once per browser, because the key we most need to warn about is the
+  // one key we can never see a `keydown` for.
+  hintOnce();
 
   // The first fit must wait a frame, or xterm measures a zero-height container
   // and every subsequent resize is computed from a wrong baseline.
