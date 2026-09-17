@@ -237,13 +237,27 @@ async function writeAsRoot(session, target, content, password) {
 
   try {
     const { prefix, stdin } = await privileged(session, 'system', password);
-    // -C keeps the original mode/owner when the file already exists, so saving
-    // /etc/sudoers.d/x does not silently widen its permissions to the default.
-    const exists = await session.exec(`test -e ${q(target)} && echo YES || echo NO`);
-    const preserve = exists.stdout.includes('YES')
-      ? `--mode=$(stat -c %a ${q(target)}) --owner=$(stat -c %U ${q(target)}) --group=$(stat -c %G ${q(target)}) `
-      : '-m 0644 -o root -g root ';
-    const result = await session.exec(`${prefix}install -D ${preserve}${q(temp)} ${q(target)} 2>&1`, { stdin });
+
+    // Both the "does it exist" test and the stat MUST run with privilege, in the
+    // same privileged command as the install.
+    //
+    // Running them as the logged-in user is a security bug, not a style choice:
+    // in a directory the user cannot traverse (/etc/ssl/private is 710
+    // root:ssl-cert on stock Ubuntu) `test -e` answers "no" for a file that is
+    // very much there, and the write then lands with the new-file defaults —
+    // turning a 640 root:ssl-cert private key into a world-readable one. Doing
+    // it in one shell also closes the window between the stat and the install.
+    //
+    // The paths go in as positional arguments so the script body needs no
+    // nested quoting, and a filename can never be read as shell syntax.
+    const preserveOrDefault = 'if [ -e "$2" ]; then '
+      + 'install -D --mode="$(stat -c %a "$2")" --owner="$(stat -c %U "$2")" --group="$(stat -c %G "$2")" "$1" "$2"; '
+      + 'else install -D -m 0644 -o root -g root "$1" "$2"; fi';
+
+    const result = await session.exec(
+      `${prefix}sh -c ${q(preserveOrDefault)} sh ${q(temp)} ${q(target)} 2>&1`,
+      { stdin },
+    );
 
     const sudoError = translateSudo(result);
     if (sudoError) throw sudoError;

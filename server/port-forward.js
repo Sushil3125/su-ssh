@@ -113,8 +113,18 @@ class Forward {
     this.total += 1;
     this.lastActivity = new Date().toISOString();
 
-    socket.on('data', (d) => { this.bytesOut += d.length; this.lastActivity = new Date().toISOString(); });
-    stream.on('data', (d) => { this.bytesIn += d.length; this.lastActivity = new Date().toISOString(); });
+    // Traffic through a tunnel is the session being used, even with no browser
+    // tab open and no HTTP request in sight. Without this the idle reaper
+    // cheerfully tears down the SSH connection underneath a working forward —
+    // a database client mid-query does not care that nobody clicked anything.
+    const active = () => {
+      this.lastActivity = new Date().toISOString();
+      this.session.touch();
+    };
+    active();
+
+    socket.on('data', (d) => { this.bytesOut += d.length; active(); });
+    stream.on('data', (d) => { this.bytesIn += d.length; active(); });
 
     let done = false;
     const finish = () => {
