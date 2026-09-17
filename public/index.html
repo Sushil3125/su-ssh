@@ -6,6 +6,10 @@
 <title>su-ssh — Remote Desktop over SSH</title>
 <link rel="stylesheet" href="/vendor/xterm-css/xterm.css">
 <link rel="stylesheet" href="/css/desktop.css">
+<!-- Installable as an app: in a Chromium app window nothing is reserved, so
+     Ctrl+W reaches the terminal. There is deliberately NO service worker —
+     see README "Keyboard" for why a stale cache is unacceptable here. -->
+<link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23E95420'/></svg>">
 </head>
 <body>
@@ -151,6 +155,16 @@
     <div class="topbar__centre" id="topbar-clock">—</div>
     <div class="topbar__right">
       <span id="topbar-sys" class="topbar__sys">—</span>
+      <button class="topbar__btn topbar__btn--icon" id="btn-shortcuts"
+              title="Keyboard shortcuts (Alt+Shift+H)" aria-label="Keyboard shortcuts">?</button>
+      <!-- The only thing telling the user the browser has been disarmed: in
+           fullscreen there is no browser chrome left to look at. Painted from
+           `fullscreenchange`, never from its own click, so it cannot lie. -->
+      <button class="topbar__btn topbar__btn--capture" id="btn-capture" aria-pressed="false"
+              title="Capture keyboard — send Ctrl+W, Ctrl+T and Ctrl+N to the terminal  (Alt+Shift+K)"
+              aria-label="Capture keyboard — send browser shortcuts to the terminal">
+        <span class="topbar__btn-label">Capture keys</span>
+      </button>
       <button class="topbar__btn" id="btn-disconnect" title="Disconnect">Disconnect</button>
     </div>
   </div>

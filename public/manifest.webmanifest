@@ -1,0 +1,16 @@
+{
+  "name": "su-ssh",
+  "short_name": "su-ssh",
+  "description": "A browser desktop for any Linux server, over nothing but SSH.",
+  "start_url": ".",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "background_color": "#240018",
+  "theme_color": "#240018",
+  "prefer_related_applications": false,
+  "icons": [
+    { "src": "/icons/su-ssh.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "/icons/su-ssh-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

@@ -17,6 +17,9 @@ import { openServices } from './services.js';
 import { startSystemMonitor } from './sysmon.js';
 import { initRail, renderRail, railShortcut } from './rail.js';
 import {
+  installTerminalKeyClaims, initCapture, toggleCapture, openShortcutsPanel, makeUnloadGuard,
+} from './keyboard.js';
+import {
   addSession, removeSession, setActive, activeSession, allSessions, sessionByToken,
   mostRecentOther, markDropped, notify, onChange, atFull, MAX_PER_TAB, targetId,
   savedSessions, clearPersisted, restoreIdentity, saveIdentity, identityFor,
@@ -867,8 +870,15 @@ initRail({
   onRename: (session) => renameSession(session),
 });
 
-onChange(() => { renderRail(); paintIdentity(); });
-setWindowCountListener(() => renderRail());
+/**
+ * Ctrl+W is the browser's in a normal tab, so the only defence left is to make
+ * leaving cost one extra keystroke — and only when there is a live shell to
+ * lose. See keyboard.js for why the scope is this narrow.
+ */
+const syncUnloadGuard = makeUnloadGuard(allSessions);
+
+onChange(() => { renderRail(); paintIdentity(); syncUnloadGuard(); });
+setWindowCountListener(() => { renderRail(); syncUnloadGuard(); });
 
 /* ════════════════════════════════════════════════════════ keyboard ═════ */
 
@@ -885,6 +895,8 @@ window.addEventListener('keydown', (e) => {
   e.stopImmediatePropagation();
 
   if (hit.kind === 'add') return void requestAddConnection();
+  if (hit.kind === 'capture') return void toggleCapture();
+  if (hit.kind === 'help') return void openShortcutsPanel();
 
   const sessions = allSessions();
   if (!sessions.length) return;
@@ -898,6 +910,22 @@ window.addEventListener('keydown', (e) => {
   const step = hit.kind === 'next' ? 1 : -1;
   activate(sessions[(at + step + sessions.length) % sessions.length]);
 }, true);
+
+// Registered *after* the rail listener, so the Alt+Shift family — which stops
+// propagation entirely — is always consumed first and capture mode can never
+// shadow it. This one only ever calls preventDefault().
+installTerminalKeyClaims();
+initCapture();
+
+// F1 opens the shortcuts panel, but never while a terminal has focus: nano
+// binds F1 to its own help, and stealing it would be precisely the bug this
+// whole feature exists to fix.
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'F1' || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+  if (document.activeElement?.closest?.('.termhost')) return;
+  e.preventDefault();
+  openShortcutsPanel();
+});
 
 /* ══════════════════════════════════════════════════ restore on reload ══ */
 

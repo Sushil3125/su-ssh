@@ -159,8 +159,15 @@ export function renderRail() {
  * and `preventDefault` + `stopImmediatePropagation` so nothing reaches the PTY.
  *
  * Alt+Shift is free: bash, readline, vim and tmux leave it alone, and neither
- * Chrome nor Firefox binds it on Linux or Windows. (Ctrl+1..9 and Ctrl+K, which
- * the research suggested, are browser tab switching and the address bar.)
+ * Chrome nor Firefox binds it on Linux or Windows.
+ *
+ * Ctrl+1..9 and Ctrl+K, which the research suggested, are browser tab switching
+ * and the address bar. Correcting the record on one narrow point: both *are*
+ * technically preventable — neither is on Chromium's reserved-command list nor
+ * marked `reserved` in Firefox's keyset. They are still the wrong choice, because
+ * Ctrl+digit is readline's `digit-argument` prefix in some configurations and
+ * silently shadowing a tab switch the user relies on is worse than owning a
+ * chord nobody else wants. Alt+Shift stands.
  */
 export function railShortcut(e) {
   if (!e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey) return null;
@@ -169,5 +176,7 @@ export function railShortcut(e) {
   if (e.code === 'BracketLeft') return { kind: 'prev' };
   if (e.code === 'BracketRight') return { kind: 'next' };
   if (e.code === 'KeyN') return { kind: 'add' };
+  if (e.code === 'KeyK') return { kind: 'capture' };
+  if (e.code === 'KeyH') return { kind: 'help' };
   return null;
 }

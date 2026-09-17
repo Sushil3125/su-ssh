@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="su-ssh">
+  <rect width="512" height="512" fill="#240018"/>
+  <circle cx="256" cy="256" r="120" fill="#E95420"/>
+  <path d="M216 216l40 40-40 40M276 296h56" fill="none" stroke="#2C001E" stroke-width="22"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

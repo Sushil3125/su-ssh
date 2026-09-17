@@ -1552,3 +1552,57 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   .sysmon__bar i { transition: none; }
 }
+
+/* ══════════════════════════════════════════════════════════ keyboard ═══ */
+
+/* The topbar's other buttons hover red because they all disconnect something.
+   These two do not, so they hover in the accent instead. */
+.topbar__btn--icon { padding: 3px 8px; font-weight: 600; }
+.topbar__btn--icon:hover,
+.topbar__btn--capture:hover { border-color: var(--orange); background: rgba(233, 84, 32, .18); color: var(--ink); }
+
+/* On. Filled, not outlined: in fullscreen this chip is the only thing on
+   screen telling the user the browser has been disarmed, so subtlety would be
+   a bug. Painted only from `fullscreenchange` — see keyboard.js. */
+.topbar__btn--capture.is-on {
+  border-color: transparent;
+  background: var(--orange);
+  color: #fff;
+  font-weight: 500;
+}
+.topbar__btn--capture.is-unsupported { opacity: .55; }
+
+/* A ring on the whole desktop while captured, for peripheral vision and for
+   screenshots — the same argument as the host line. `inset` so it costs no
+   layout and cannot shift a terminal's measured size. */
+.shell.is-captured::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 2px var(--orange);
+  z-index: 60;
+}
+
+.modal__card--wide { width: min(780px, calc(100vw - 32px)); }
+.kbd-panel { max-height: min(70vh, 620px); overflow: auto; }
+.kbd-panel section { margin-bottom: 18px; }
+.kbd-panel h3 { margin: 0 0 6px; font-size: 13px; font-weight: 500; color: var(--orange-lift); }
+.kbd-panel p { margin: 0 0 8px; font-size: 12.5px; line-height: 1.55; color: var(--ink-muted); }
+.kbd-panel kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 4px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+.kbd-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.kbd-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--ink-muted);
+  border-bottom: 1px solid var(--line);
+}
+.kbd-table th, .kbd-table td { padding: 5px 8px 5px 0; vertical-align: top; }
+.kbd-table td:first-child { font-family: var(--font-mono); white-space: nowrap; color: var(--ink); }
+.kbd-table tr + tr td { border-top: 1px solid rgba(255, 255, 255, .05); }
