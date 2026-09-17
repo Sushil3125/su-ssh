@@ -6,6 +6,10 @@
 <title>su-ssh — Remote Desktop over SSH</title>
 <link rel="stylesheet" href="/vendor/xterm-css/xterm.css">
 <link rel="stylesheet" href="/css/desktop.css">
+<!-- The icon sprite is one same-origin request for the whole UI. Preloaded so
+     the first paint is not icon-less. It is served by our own express.static:
+     no CDN, so the app works with no internet. -->
+<link rel="preload" href="/icons/icons.svg" as="image" type="image/svg+xml">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23E95420'/></svg>">
 </head>
 <body>
@@ -37,7 +41,7 @@
       <!-- Only shown when the greeter is an overlay over a live desktop: on the
            front door there is nothing behind it to go back to. -->
       <button type="button" class="greeter__cancel is-hidden" id="greeter-cancel"
-              title="Cancel (Esc)" aria-label="Cancel and return to the desktop">✕</button>
+              title="Cancel (Esc)" aria-label="Cancel and return to the desktop"><svg class="icon" width="15" height="15" aria-hidden="true" focusable="false"><use href="/icons/icons.svg#i-x"></use></svg></button>
       <h1>Connect to a server</h1>
       <p>Everything you see next is read live over SSH. Nothing is cached on this machine.</p>
     </header>
@@ -142,7 +146,7 @@
       <!-- Identity chip: colour, label and (when set) environment tag. Never
            truncated below the host name, and present at 360px. -->
       <span class="topbar__chip" id="topbar-chip">
-        <span class="dot dot--live" id="link-dot" role="img" aria-label="Connected"></span>
+        <span class="dot dot--live" id="link-dot" role="img" aria-label="Connected"><svg class="icon" width="13" height="13" aria-hidden="true" focusable="false"><use href="/icons/icons.svg#i-circle-dot"></use></svg></span>
         <span id="topbar-conn">—</span>
         <em class="topbar__env is-hidden" id="topbar-env"></em>
       </span>
@@ -151,7 +155,7 @@
     <div class="topbar__centre" id="topbar-clock">—</div>
     <div class="topbar__right">
       <span id="topbar-sys" class="topbar__sys">—</span>
-      <button class="topbar__btn" id="btn-disconnect" title="Disconnect">Disconnect</button>
+      <button type="button" class="topbar__btn" id="btn-disconnect" title="Disconnect"><svg class="icon" width="14" height="14" aria-hidden="true" focusable="false"><use href="/icons/icons.svg#i-log-out"></use></svg><span>Disconnect</span></button>
     </div>
   </div>
 
@@ -161,30 +165,30 @@
 
   <nav class="rail is-hidden" id="rail" aria-label="Connected servers">
     <div class="rail__list" id="rail-list" role="tablist" aria-label="Servers"></div>
-    <button class="rail__btn rail__add" id="rail-add" title="Add a connection  (Alt+Shift+N)" aria-label="Add a connection">+</button>
-    <button class="rail__btn rail__menu" id="rail-menu" title="All connections" aria-label="All connections">⋯</button>
+    <button type="button" class="rail__btn rail__add" id="rail-add" title="Add a connection  (Alt+Shift+N)" aria-label="Add a connection"><svg class="icon" width="18" height="18" aria-hidden="true" focusable="false"><use href="/icons/icons.svg#i-plus"></use></svg></button>
+    <button type="button" class="rail__btn rail__menu" id="rail-menu" title="All connections" aria-label="All connections" aria-haspopup="menu"><svg class="icon" width="18" height="18" aria-hidden="true" focusable="false"><use href="/icons/icons.svg#i-ellipsis"></use></svg></button>
   </nav>
 
   <nav class="dock" id="dock" aria-label="Applications">
-    <button class="dock__item" data-launch="files" title="Files">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 014.5 5h4l2 2.2h9A1.5 1.5 0 0121 8.7v9.8a1.5 1.5 0 01-1.5 1.5h-15A1.5 1.5 0 013 18.5z"/></svg>
-      <span class="dock__label">Files</span>
+    <button type="button" class="dock__item" data-launch="files" title="Files" aria-label="Files">
+      <svg class="icon" width="25" height="25" aria-hidden="true" focusable="false"><use href="/icons/icons.svg#i-folder"></use></svg>
+      <span class="dock__label" aria-hidden="true">Files</span>
     </button>
-    <button class="dock__item" data-launch="terminal" title="Terminal">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="4" width="19" height="16" rx="2"/><path d="M6.5 9.5l3 2.5-3 2.5M12.5 15h5" stroke="#2C001E" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      <span class="dock__label">Terminal</span>
+    <button type="button" class="dock__item" data-launch="terminal" title="Terminal" aria-label="Terminal">
+      <svg class="icon" width="25" height="25" aria-hidden="true" focusable="false"><use href="/icons/icons.svg#i-terminal"></use></svg>
+      <span class="dock__label" aria-hidden="true">Terminal</span>
     </button>
-    <button class="dock__item" data-launch="ports" title="Port forwarding">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h7a4 4 0 014 4v8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M4 18h7a4 4 0 004-4V6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="19" cy="6" r="2.4"/><circle cx="19" cy="18" r="2.4"/></svg>
-      <span class="dock__label">Ports</span>
+    <button type="button" class="dock__item" data-launch="ports" title="Port forwarding" aria-label="Port forwarding">
+      <svg class="icon" width="25" height="25" aria-hidden="true" focusable="false"><use href="/icons/icons.svg#i-arrow-right-left"></use></svg>
+      <span class="dock__label" aria-hidden="true">Ports</span>
     </button>
-    <button class="dock__item" data-launch="services" title="Services">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="1.6"/><rect x="3" y="14" width="18" height="6" rx="1.6"/><circle cx="7" cy="7" r="1.1" fill="#2C001E"/><circle cx="7" cy="17" r="1.1" fill="#2C001E"/></svg>
-      <span class="dock__label">Services</span>
+    <button type="button" class="dock__item" data-launch="services" title="Services" aria-label="Services">
+      <svg class="icon" width="25" height="25" aria-hidden="true" focusable="false"><use href="/icons/icons.svg#i-server"></use></svg>
+      <span class="dock__label" aria-hidden="true">Services</span>
     </button>
-    <button class="dock__item" data-launch="editor" title="Text editor">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l5 5v13a1 1 0 01-1 1H6a1 1 0 01-1-1V4a1 1 0 011-1z"/><path d="M14 3v5h5" fill="#2C001E"/></svg>
-      <span class="dock__label">Editor</span>
+    <button type="button" class="dock__item" data-launch="editor" title="Text editor" aria-label="Text editor">
+      <svg class="icon" width="25" height="25" aria-hidden="true" focusable="false"><use href="/icons/icons.svg#i-file-pen"></use></svg>
+      <span class="dock__label" aria-hidden="true">Editor</span>
     </button>
     <div class="dock__rule"></div>
     <div class="dock__running" id="dock-running"></div>

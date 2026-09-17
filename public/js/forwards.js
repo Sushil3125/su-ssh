@@ -8,6 +8,7 @@
 
 import { formatBytes } from './ui.js';
 import { escapeHtml } from './wm.js';
+import { icon, iconButton } from './icon.js';
 
 export const KIND_HELP = {
   local: 'Listen on this machine, and let the <strong>server</strong> reach the destination. Use this to open a remote database or web app in your local browser.',
@@ -144,7 +145,16 @@ export function wireForwardForm(root, onAdd) {
   return { read, reset: applyKind };
 }
 
-const KIND_BADGE = { local: '−L', remote: '−R', dynamic: '−D' };
+/**
+ * The badge for a forward's direction. Each kind gets a distinct shape and the
+ * ssh flag stays in the accessible name, so "-L" is still findable by anyone
+ * who thinks in ssh flags rather than arrows.
+ */
+const KIND_BADGE = {
+  local:   { name: 'arrow-down-to-line', label: 'Local forward (-L)' },
+  remote:  { name: 'arrow-up-from-line', label: 'Remote forward (-R)' },
+  dynamic: { name: 'globe', label: 'SOCKS proxy (-D)' },
+};
 
 /**
  * One row per forward. `queued` rows are the greeter's: they have no id, no
@@ -154,20 +164,25 @@ export function forwardRowHtml(fwd, { queued = false } = {}) {
   const status = queued ? 'queued' : (fwd.status || 'unknown');
   const traffic = queued
     ? 'opens when you connect'
-    : `${fwd.connections} open · ${fwd.total} total · ↓${formatBytes(fwd.bytesIn || 0)} ↑${formatBytes(fwd.bytesOut || 0)}`;
+    : `${fwd.connections} open · ${fwd.total} total`;
+  const bytes = queued ? '' :
+    `<span class="fwd-row__bytes">${icon('download', { size: 12 })}<span>${formatBytes(fwd.bytesIn || 0)}</span>`
+    + `${icon('upload', { size: 12 })}<span>${formatBytes(fwd.bytesOut || 0)}</span></span>`;
+  const badge = KIND_BADGE[fwd.kind] || { name: 'circle-alert', label: 'Unknown forward kind' };
 
   return `
     <div class="fwd-row fwd-row--${status}" data-id="${escapeHtml(fwd.id || '')}">
-      <span class="fwd-row__badge">${KIND_BADGE[fwd.kind] || '?'}</span>
+      <span class="fwd-row__badge" role="img" title="${badge.label}" aria-label="${badge.label}">${icon(badge.name, { size: 15 })}</span>
       <div class="fwd-row__main">
         <div class="fwd-row__title">
           ${fwd.label ? `<strong>${escapeHtml(fwd.label)}</strong>` : ''}
           <code>${escapeHtml(fwd.description || describeSpec(fwd))}</code>
         </div>
-        <div class="fwd-row__meta">${escapeHtml(traffic)}${fwd.error ? ` · ${escapeHtml(fwd.error)}` : ''}</div>
+        <div class="fwd-row__meta">${escapeHtml(traffic)}${bytes}${fwd.error ? ` · ${escapeHtml(fwd.error)}` : ''}</div>
       </div>
       <span class="fwd-row__status">${status}</span>
-      <button class="fwd-row__x" data-act="remove" title="${queued ? 'Remove from the queue' : 'Close this forward'}">✕</button>
+      ${iconButton('x', `${queued ? 'Remove from the queue' : 'Close forward'}: ${fwd.description || describeSpec(fwd)}`,
+        { size: 14, className: 'fwd-row__x', attrs: 'data-act="remove"' })}
     </div>`;
 }
 

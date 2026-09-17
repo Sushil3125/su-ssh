@@ -67,7 +67,8 @@ async function warnChanged(err) {
   const hk = err.hostKey || {};
   const expected = (hk.expected || []).map((e) => `${e.keyType} ${e.fingerprint}`).join('  or  ') || 'unknown';
   const result = await openDialog({
-    title: `⚠ Host key for ${where(hk)} has CHANGED`,
+    title: `Host key for ${where(hk)} has CHANGED`,
+    titleIcon: 'triangle-alert',
     message: 'The key this server presented is not the one that was pinned. Either someone is intercepting the '
       + 'connection and could capture everything you type — including your password — or the server was rebuilt '
       + 'or its host key was rotated.\n\nThe connection was refused. Confirm the new fingerprint with whoever runs '

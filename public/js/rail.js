@@ -19,6 +19,7 @@ import {
   allSessions, activeSession, atFull, MAX_PER_TAB, sessionById,
 } from './sessions.js';
 import { contextMenu } from './ui.js';
+import { icon } from './icon.js';
 
 const list = () => document.getElementById('rail-list');
 
@@ -77,12 +78,12 @@ export function initRail(callbacks) {
     const session = sessionById(chip.dataset.id);
     if (!session) return;
     contextMenu(e.clientX, e.clientY, [
-      { label: `Switch to ${session.label}`, onClick: () => hooks.onSwitch(session) },
-      { label: 'Rename / colour…', onClick: () => hooks.onRename(session) },
+      { label: `Switch to ${session.label}`, icon: 'arrow-right', onClick: () => hooks.onSwitch(session) },
+      { label: 'Rename / colour…', icon: 'pencil', onClick: () => hooks.onRename(session) },
       ...(session.status === 'dropped'
-        ? [{ label: 'Reconnect…', onClick: () => hooks.onReconnect(session) },
-           { label: 'Close', danger: true, onClick: () => hooks.onCloseDropped(session) }]
-        : [{ label: 'Disconnect…', danger: true, onClick: () => hooks.onDisconnect(session) }]),
+        ? [{ label: 'Reconnect…', icon: 'rotate-cw', onClick: () => hooks.onReconnect(session) },
+           { label: 'Close', icon: 'x', danger: true, onClick: () => hooks.onCloseDropped(session) }]
+        : [{ label: 'Disconnect…', icon: 'log-out', danger: true, onClick: () => hooks.onDisconnect(session) }]),
     ]);
   });
 
@@ -102,14 +103,17 @@ export function initRail(callbacks) {
     const rect = e.currentTarget.getBoundingClientRect();
     const sessions = allSessions();
     contextMenu(rect.right + 4, rect.top, [
-      { label: 'Add connection…  (Alt+Shift+N)', onClick: () => hooks.onAdd() },
+      { label: 'Add connection…  (Alt+Shift+N)', icon: 'plus', onClick: () => hooks.onAdd() },
       'separator',
+      // The tick is an icon beside the label now, not two spaces and a
+      // character glued onto the accessible name.
       ...sessions.map((s) => ({
-        label: `${s.label}${s.id === activeSession()?.id ? '  ✓' : ''}`,
+        label: s.label,
+        icon: s.id === activeSession()?.id ? 'check' : null,
         onClick: () => hooks.onSwitch(s),
       })),
       'separator',
-      { label: `Disconnect all (${sessions.length})`, danger: true, onClick: () => hooks.onDisconnectAll() },
+      { label: `Disconnect all (${sessions.length})`, icon: 'log-out', danger: true, onClick: () => hooks.onDisconnectAll() },
     ]);
   });
 }
@@ -137,8 +141,8 @@ export function renderRail() {
           ${s.env ? `<span class="chip__env">${escapeHtml(s.env)}</span>` : ''}
         </button>
         ${s.status === 'dropped'
-          ? `<button type="button" class="chip__act" data-act="reconnect" title="Reconnect ${escapeHtml(s.label)}" aria-label="Reconnect ${escapeHtml(s.label)}">⟳</button>`
-          : `<button type="button" class="chip__act" data-act="close" title="Disconnect ${escapeHtml(s.label)}" aria-label="Disconnect ${escapeHtml(s.label)}">✕</button>`}
+          ? `<button type="button" class="chip__act" data-act="reconnect" title="Reconnect ${escapeHtml(s.label)}" aria-label="Reconnect ${escapeHtml(s.label)}">${icon('rotate-cw', { size: 14 })}</button>`
+          : `<button type="button" class="chip__act" data-act="close" title="Disconnect ${escapeHtml(s.label)}" aria-label="Disconnect ${escapeHtml(s.label)}">${icon('log-out', { size: 14 })}</button>`}
       </div>`;
   }).join('');
 

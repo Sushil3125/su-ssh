@@ -19,6 +19,8 @@
  * that can put a prod window on the staging desktop.
  */
 
+import { icon } from './icon.js';
+
 const layersHost = () => document.getElementById('windows');
 const taskHost = () => document.getElementById('dock-running');
 const iconsHost = () => document.getElementById('desktop-icons');
@@ -95,7 +97,7 @@ export function setWorkspaceFrozen(ws, frozen) {
   ws.layer.classList.toggle('is-frozen', frozen);
 }
 
-export function createWindow({ title, subtitle = '', icon = '▣', width = 720, height = 460, appId = null }) {
+export function createWindow({ title, subtitle = '', iconName = 'app-window', width = 720, height = 460, appId = null }) {
   const ws = current;
   if (!ws) throw new Error('No active session: open a connection first.');
   const id = `win-${++seq}`;
@@ -121,13 +123,13 @@ export function createWindow({ title, subtitle = '', icon = '▣', width = 720, 
       <span class="win__title">${escapeHtml(title)} <span class="win__sub"></span>
         <span class="win__host"></span></span>
       <div class="win__ctl">
-        <button class="win__btn" data-act="min" title="Minimise" aria-label="Minimise">–</button>
-        <button class="win__btn" data-act="max" title="Maximise" aria-label="Maximise">□</button>
-        <button class="win__btn win__btn--close" data-act="close" title="Close" aria-label="Close">✕</button>
+        <button class="win__btn" data-act="min" title="Minimise" aria-label="Minimise">${icon('minus', { size: 14 })}</button>
+        <button class="win__btn" data-act="max" title="Maximise" aria-label="Maximise" aria-pressed="false">${icon('square', { size: 13 })}</button>
+        <button class="win__btn win__btn--close" data-act="close" title="Close" aria-label="Close">${icon('x', { size: 14 })}</button>
       </div>
     </div>
     <div class="win__body"></div>
-    <div class="win__grip" title="Resize"></div>`;
+    <div class="win__grip" title="Resize" aria-hidden="true">${icon('move-diagonal-2', { size: 13 })}</div>`;
 
   el.querySelector('.win__host').textContent = ws.label;
   el.querySelector('.win__host').title = ws.host;
@@ -135,9 +137,9 @@ export function createWindow({ title, subtitle = '', icon = '▣', width = 720, 
 
   const task = document.createElement('button');
   task.className = 'dock__task';
-  task.textContent = icon;
-  task.title = `${title} — ${ws.label}`;
-  task.setAttribute('aria-label', `${title} on ${ws.label}`);
+  task.type = 'button';
+  task.innerHTML = `${icon(iconName, { size: 18 })}<span class="dock__task-ord is-hidden"></span>`
+    + `<span class="dock__task-label"></span>`;
   task.addEventListener('click', () => {
     if (el.classList.contains('is-min') || !el.classList.contains('is-focused')) restore(id);
     else minimise(id);
@@ -153,15 +155,18 @@ export function createWindow({ title, subtitle = '', icon = '▣', width = 720, 
     setSubtitle: (text) => { el.querySelector('.win__sub').textContent = text; },
     setTitle: (text) => {
       el.querySelector('.win__title').firstChild.textContent = `${text} `;
-      task.title = `${text} — ${ws.label}`;
+      nameTask(win);
     },
     close: () => closeWindow(id),
   };
   ws.windows.set(id, win);
+  nameSiblings(ws, appId);
 
   el.addEventListener('pointerdown', () => focus(id), true);
   el.querySelector('.win__ctl').addEventListener('click', (e) => {
-    const act = e.target.dataset.act;
+    // closest(), not e.target: the click usually lands on the <svg> inside the
+    // button now that these are icons rather than characters.
+    const act = e.target.closest('[data-act]')?.dataset.act;
     if (act === 'close') closeWindow(id);
     if (act === 'min') minimise(id);
     if (act === 'max') toggleMax(id);
@@ -277,8 +282,50 @@ function minimise(id) {
 function toggleMax(id) {
   const win = lookup(id);
   if (!win) return;
-  win.el.classList.toggle('is-max');
+  const max = win.el.classList.toggle('is-max');
+  const btn = win.el.querySelector('[data-act="max"]');
+  btn.setAttribute('aria-pressed', String(max));
+  // Maximise and Restore are different actions, so they get different names and
+  // different glyphs — `square` fills the screen, `copy` puts the window back.
+  const label = max ? 'Restore' : 'Maximise';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  btn.innerHTML = icon(max ? 'copy' : 'square', { size: 13 });
   win.onResize?.();
+}
+
+/**
+ * Name a taskbar button: "<window title> — <session label>", with an ordinal
+ * when the session holds more than one window of the same app, so two Terminals
+ * are never two identical buttons with two identical names. Both the visible
+ * label and the accessible name come from the same string.
+ */
+function nameTask(win) {
+  const siblings = [...win.ws.windows.values()].filter((w) => w.appId && w.appId === win.appId);
+  const nth = siblings.length > 1 ? ` ${siblings.indexOf(win) + 1}` : '';
+  const title = win.el.querySelector('.win__title').firstChild.textContent.trim();
+  const full = `${title}${nth} — ${win.ws.label}`;
+  win.task.title = full;
+  win.task.setAttribute('aria-label', full);
+  win.task.querySelector('.dock__task-label').textContent = title;
+  // The label is truncated at 52px, so the ordinal would disappear inside it.
+  // It gets its own corner badge instead: two Terminals must never be two
+  // identical glyphs above two identical truncations.
+  const ord = win.task.querySelector('.dock__task-ord');
+  ord.textContent = nth.trim();
+  ord.classList.toggle('is-hidden', !nth);
+}
+
+/**
+ * Re-derive the names of every window of one appId. Called after a create and
+ * after a close, never only for the window that changed: an ordinal that goes
+ * stale is worse than no ordinal, because the user then clicks "Terminal 2" and
+ * gets Terminal 3.
+ */
+function nameSiblings(ws, appId) {
+  for (const w of ws.windows.values()) {
+    if (!appId || w.appId === appId || !w.appId) nameTask(w);
+  }
 }
 
 /**
@@ -309,6 +356,7 @@ export async function closeWindow(id, { force = false } = {}) {
   win.el.remove();
   win.task.remove();
   ws.windows.delete(id);
+  nameSiblings(ws, win.appId);
   if (ws.lastFocused === id) ws.lastFocused = null;
   syncDockRunning();
   onWindowCountChange?.(ws);

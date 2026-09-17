@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+### A real icon system
+- **Every emoji and character icon is gone.** The file-type map (📁 📄 🖼️ 📕 🗜️ ⚙️ ❓),
+  the window controls (`–` `□` `✕`), the taskbar glyphs, the Files toolbar
+  (`←` `→` `↑` `⌂` `⟳` `＋` `⬆`), the recents pin/forget (`★` `☆` `✕`), the rail
+  `+` / `⋯` / `⟳` / `✕`, the forward badges (`−L` `−R` `−D`), the services
+  refresh, the host-key `⚠` and the greeter's `▸` are now icons from
+  [Lucide](https://lucide.dev). Emoji rendering varied per platform, was missing
+  entirely on servers and in headless browsers, and was announced as gibberish by
+  screen readers.
+- **One vendored sprite, no CDN.** `public/icons/icons.svg` is 77 symbols in
+  14,980 bytes (3,548 gzipped), served by the existing `express.static` and
+  referenced with `<use>`; the app still works with no internet. Not inlined as a
+  `data:` URI — Chrome removed `data:`-URI `<use>` in 120, Firefox in 122.
+  `lucide-static` is not a runtime dependency; `tools/build-sprite.mjs`
+  regenerates the sprite by hand from `tools/icon-names.json`.
+- **`icon()` / `iconButton()`** in `public/js/icon.js`. Every `<svg>` is
+  `aria-hidden="true" focusable="false"` with no way to turn that off, and
+  `iconButton()` throws without a label, so an icon-only control cannot ship
+  unnamed. An unknown icon name is a console error and a visible
+  `circle-alert`, not an invisible gap.
+- **The five hand-drawn dock SVGs are replaced** by `folder`, `terminal`,
+  `arrow-right-left`, `server` and `file-pen`: solid tinted paths next to stroke
+  art read as two different icon sets.
+- **Fixed the CSS trap:** `.dock__item svg { fill: var(--orange) }` would have
+  rendered stroke-art icons as solid blobs. Icons are now `fill: none;
+  stroke: currentColor`, and colour is inherited from any ancestor's `color`.
+- **Status is a shape, not only a colour.** The connection dot is
+  `circle-dot` / `loader` / `unplug` and a service is
+  `circle-check` / `circle-x` / `loader` / `circle-minus`, so red/green
+  colour-blindness no longer erases the meaning. The reconnecting container
+  carries `role="status"`.
+- **Taskbar buttons are distinguishable.** A task button is now an icon, a
+  truncated title and an ordinal badge, named
+  `"<title> <n> — <session>"` — so two Terminals on `prod-db` are "Terminal 1 —
+  prod-db" and "Terminal 2 — prod-db" rather than two identical glyphs with two
+  identical names. Names are re-derived for every sibling whenever one opens or
+  closes, because a stale ordinal is worse than none.
+- **Maximise and Restore are now different** — different icon, different
+  accessible name, plus `aria-pressed`.
+- **Accessible names added** where only a `title` existed: the seven Files
+  toolbar buttons, the Services refresh and daemon-reload buttons, and the
+  forward close buttons (which now name the endpoints, not just "Close").
+- Attribution and the upstream licence ship with the package: see
+  `public/icons/LICENSE.lucide.txt` and the Credits section of the README.
+
 ### Multi-session switching
 - **Several servers in one tab.** A host rail sits left of the app dock with one
   chip per connection: colour bar, initials, status dot, open-window count and an
