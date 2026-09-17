@@ -133,8 +133,12 @@ export function createApi(token) {
     previewUrl:  (path) => `/api/fs/download?inline=1&path=${encodeURIComponent(path)}&token=${t}`,
 
     metricsUrl: (interval) => `${wsBase}/ws/metrics?token=${t}&interval=${interval}`,
-    journalUrl: (unit, scope, lines, follow) =>
-      `${wsBase}/ws/journal?token=${t}&unit=${encodeURIComponent(unit)}&scope=${scope}&lines=${lines}&follow=${follow ? 1 : 0}`,
+    /** `span` is one of the fixed keys journal-ws.js knows (15m/1h/today/boot/
+     *  all); `format=json` is what makes the stream carry PRIORITY, which is
+     *  where the log view's colouring comes from. */
+    journalUrl: (unit, scope, lines, follow, { span = 'all', format = 'json' } = {}) =>
+      `${wsBase}/ws/journal?token=${t}&unit=${encodeURIComponent(unit)}&scope=${scope}&lines=${lines}`
+      + `&follow=${follow ? 1 : 0}&span=${encodeURIComponent(span)}&format=${encodeURIComponent(format)}`,
     terminalUrl: (cols, rows) => `${wsBase}/ws/terminal?token=${t}&cols=${cols}&rows=${rows}`,
   };
 }

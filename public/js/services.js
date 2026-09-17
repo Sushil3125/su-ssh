@@ -62,7 +62,22 @@ const FILTERS = {
 
 const MAX_LOG_LINES = 5000;
 
-export function openServices(startUnit = null) {
+/**
+ * syslog severities, as journalctl reports them in PRIORITY. The words matter
+ * as much as the colours: a red line has to say *why* it is red somewhere a
+ * screenshot or a screen reader can reach.
+ */
+const PRIORITY_WORD = {
+  0: 'emerg', 1: 'alert', 2: 'crit', 3: 'err', 4: 'warning', 5: 'notice', 6: 'info', 7: 'debug',
+};
+
+/**
+ * `startTab`/`startScope` exist for restore.js: after a refresh a Services
+ * window that was reading cron.service's journal on the user manager has to
+ * come back reading exactly that, not the system scope's Status tab.
+ */
+export function openServices(startUnit = null,
+  { scope: startScope = null, tab: startTab = null, filter: startFilter = null } = {}) {
   // Captured once: every systemctl call this window ever makes goes to this
   // host, and every confirm it raises names it.
   const session = requireSession();
@@ -123,16 +138,36 @@ export function openServices(startUnit = null) {
           <div class="svc__pane is-hidden" data-pane="logs">
             <div class="svc__logbar">
               <label class="svc__toggle"><input type="checkbox" data-role="follow" checked> Follow</label>
-              <select class="svc__filter" data-role="loglines">
+              <select class="svc__filter" data-role="logspan" aria-label="Time window">
+                <option value="15m">last 15 min</option>
+                <option value="1h">last hour</option>
+                <option value="today">today</option>
+                <option value="boot" selected>this boot</option>
+                <option value="all">all boots</option>
+              </select>
+              <select class="svc__filter" data-role="loglines" aria-label="How many lines">
                 <option value="100">last 100</option>
                 <option value="500" selected>last 500</option>
                 <option value="2000">last 2000</option>
               </select>
+              <select class="svc__filter" data-role="logpri" aria-label="Minimum priority">
+                <option value="7" selected>all priorities</option>
+                <option value="6">info and worse</option>
+                <option value="4">warnings and worse</option>
+                <option value="3">errors only</option>
+              </select>
               <input class="svc__search svc__search--sm" placeholder="Filter lines…" data-role="logfilter" spellcheck="false">
+              <button class="tbar__btn" data-role="logcopy" title="Copy what is shown to the clipboard">Copy</button>
+              <button class="tbar__btn" data-role="logdownload" title="Download what is shown as a .log file">Download</button>
               <button class="tbar__btn" data-role="logclear" title="Clear the view">Clear</button>
               <span class="svc__logstate" data-role="logstate">idle</span>
             </div>
-            <div class="svc__log" data-role="log"></div>
+            <div class="svc__logwrap">
+              <div class="svc__log" data-role="log" tabindex="0" role="log" aria-label="Journal output"></div>
+              <button class="svc__jump is-hidden" data-role="logjump" type="button">
+                Jump to latest<span class="svc__jump__n" data-role="logjumpn"></span>
+              </button>
+            </div>
           </div>
 
           <div class="svc__pane is-hidden" data-pane="file">
@@ -157,17 +192,24 @@ export function openServices(startUnit = null) {
   const pane = (name) => win.body.querySelector(`[data-pane="${name}"]`);
 
   const state = {
-    scope: 'system',
-    filter: 'all',
+    scope: startScope === 'user' ? 'user' : 'system',
+    filter: FILTERS[startFilter] ? startFilter : 'all',
     query: '',
     services: [],
     privilege: null,
     selected: null,
     detail: null,
-    tab: 'status',
+    tab: ['status', 'logs', 'file'].includes(startTab) ? startTab : 'status',
     file: null,
     fileDirty: false,
   };
+
+  /** Show the tab `state` says we are on. Only ever differs from the markup's
+   *  default when restore.js asked for one. */
+  function syncTab() {
+    win.body.querySelectorAll('.svc__tab').forEach((b) => b.classList.toggle('is-active', b.dataset.tab === state.tab));
+    ['status', 'logs', 'file'].forEach((name) => pane(name).classList.toggle('is-hidden', name !== state.tab));
+  }
 
   /* ─────────────────────────────────────────────────────────── privilege ─ */
 
@@ -357,6 +399,41 @@ export function openServices(startUnit = null) {
   let logLines = [];
   let pending = '';
 
+  /**
+   * Scroll state, which is *not* the same thing as the Follow checkbox.
+   *
+   * Follow says whether journalctl is still tailing on the server. `pinned`
+   * says whether the view is stuck to the bottom. Scrolling up to read
+   * something pauses the view without stopping the stream — the lines keep
+   * arriving, the buffer keeps growing, and the count on the jump button says
+   * how many you have not seen. Before this the only control was Follow, so
+   * reading a line meant either fighting the autoscroll or killing the stream
+   * and losing everything after it.
+   */
+  let pinned = true;
+  let unseen = 0;
+  /**
+   * Did journalctl finish on its own?
+   *
+   * With Follow off the command prints its lines and exits, which closes the
+   * socket — a completely normal end. Treating every close as a drop painted a
+   * red "Log stream disconnected · Reconnect" over a read that had just
+   * succeeded, which is the same class of lie as the old always-green link dot.
+   */
+  let endedCleanly = false;
+
+  /**
+   * What the state word says once the stream is up.
+   *
+   * `journalctl -f` only ever replays the *current boot*, whatever `-n` says —
+   * so "all boots" while following quietly means "this boot", and a state word
+   * that just said "streaming" would let the user believe they were looking at
+   * a history that is not on screen. Saying so is cheaper than pretending.
+   */
+  const readyWord = (follow, span) => (follow
+    ? (span === 'all' ? 'streaming · this boot' : 'streaming')
+    : 'loaded');
+
   function stopLogs() {
     if (!socket) return;
     const s = socket;
@@ -371,12 +448,18 @@ export function openServices(startUnit = null) {
 
     logLines = [];
     pending = '';
+    pinned = true;
+    unseen = 0;
+    endedCleanly = false;
     $('log').innerHTML = '';
+    $('logstate').classList.remove('svc__logstate--lost');
     $('logstate').textContent = 'connecting…';
+    updateJump();
 
     const lines = Number($('loglines').value);
     const follow = $('follow').checked;
-    const ws = new WebSocket(api.journalUrl(state.selected, state.scope, lines, follow));
+    const ws = new WebSocket(api.journalUrl(state.selected, state.scope, lines, follow,
+      { span: $('logspan').value, format: 'json' }));
     socket = ws;
     ws.binaryType = 'arraybuffer';
 
@@ -386,8 +469,11 @@ export function openServices(startUnit = null) {
       if (typeof event.data !== 'string') return appendChunk(new TextDecoder().decode(event.data));
 
       const msg = JSON.parse(event.data);
-      if (msg.type === 'ready') $('logstate').textContent = follow ? 'streaming' : 'loaded';
-      if (msg.type === 'exit') $('logstate').textContent = 'ended';
+      if (msg.type === 'ready') $('logstate').textContent = readyWord(follow, msg.span);
+      if (msg.type === 'exit') {
+        endedCleanly = true;
+        $('logstate').textContent = follow ? 'ended' : 'loaded';
+      }
       if (msg.type === 'error') {
         $('logstate').textContent = 'error';
         if (msg.needsPassword) {
@@ -408,6 +494,12 @@ export function openServices(startUnit = null) {
     ws.addEventListener('close', () => {
       if (socket !== ws) return;
       socket = null;
+      // A read that ran to completion is not a drop, and must not be dressed as
+      // one. Only an unexpected close gets the reconnect affordance.
+      if (endedCleanly) {
+        $('logstate').textContent = follow ? 'ended' : 'loaded';
+        return;
+      }
       // Same reasoning as the terminal: a stream that died is told to the user
       // with the one action that fixes it, not as a 10px grey word.
       showLogLost('Log stream disconnected');
@@ -433,17 +525,110 @@ export function openServices(startUnit = null) {
     stopLogs();
     const lines = Number($('loglines').value);
     const follow = $('follow').checked;
-    const ws = new WebSocket(api.journalUrl(state.selected, state.scope, lines, follow));
+    const ws = new WebSocket(api.journalUrl(state.selected, state.scope, lines, follow,
+      { span: $('logspan').value, format: 'json' }));
     socket = ws;
     ws.binaryType = 'arraybuffer';
     ws.addEventListener('open', () => ws.send(JSON.stringify({ type: 'start', password })));
     ws.addEventListener('message', (event) => {
       if (typeof event.data !== 'string') return appendChunk(new TextDecoder().decode(event.data));
       const msg = JSON.parse(event.data);
-      if (msg.type === 'ready') $('logstate').textContent = follow ? 'streaming' : 'loaded';
+      if (msg.type === 'ready') $('logstate').textContent = readyWord(follow, msg.span);
       if (msg.type === 'error') toast(msg.message, 'bad', 7000);
     });
     ws.addEventListener('close', () => { if (socket === ws) { socket = null; $('logstate').textContent = 'disconnected'; } });
+  }
+
+  /**
+   * Turn one line of the stream into an entry.
+   *
+   * With `-o json` a line is one journal record and PRIORITY is on it, which is
+   * the whole point: the old code matched `/\b(error|failed)\b/i` against the
+   * rendered text, which both misses a genuine `err` whose wording is polite and
+   * paints an INFO line red for saying "failed to find optional config". systemd
+   * already knows the severity; asking it is strictly better than guessing.
+   *
+   * Not every line is a record, though. journalctl writes `-- No entries --`,
+   * boot separators and its own errors to the same stream (the command ends in
+   * `2>&1` so a sudo complaint is visible rather than lost), so anything that is
+   * not JSON is kept as a plain note instead of being dropped.
+   */
+  function parseLine(line) {
+    const text = line.trim();
+    if (!text) return null;
+    if (text[0] !== '{') return { pri: null, ident: '', pid: '', time: null, msg: text, text };
+
+    let rec;
+    try { rec = JSON.parse(text); } catch { return { pri: null, ident: '', pid: '', time: null, msg: text, text }; }
+
+    const msg = decodeMessage(rec.MESSAGE);
+    const pri = Number.isFinite(Number(rec.PRIORITY)) ? Math.min(7, Math.max(0, Number(rec.PRIORITY))) : null;
+    const ident = rec.SYSLOG_IDENTIFIER || rec._COMM || '';
+    const pid = rec._PID || '';
+    // __REALTIME_TIMESTAMP is microseconds since the epoch, always present.
+    const micros = Number(rec.__REALTIME_TIMESTAMP);
+    const time = Number.isFinite(micros) && micros > 0 ? new Date(micros / 1000) : null;
+
+    const stamp = time ? time.toISOString().replace('T', ' ').slice(0, 19) : '';
+    return {
+      pri, ident, pid, time, msg,
+      text: `${stamp} ${ident}${pid ? `[${pid}]` : ''}${ident ? ': ' : ''}${msg}`.trim(),
+    };
+  }
+
+  /** A MESSAGE that is not valid UTF-8 arrives as an array of byte values. */
+  function decodeMessage(value) {
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) {
+      try { return new TextDecoder().decode(Uint8Array.from(value)); } catch { return String(value); }
+    }
+    return value == null ? '' : String(value);
+  }
+
+  const clockOf = (entry) => (entry.time
+    ? entry.time.toLocaleTimeString(undefined, { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : '');
+
+  /** Does this entry survive the text filter and the priority floor? */
+  function passes(entry) {
+    const floor = Number($('logpri').value);
+    if (entry.pri != null && entry.pri > floor) return false;
+    const filter = $('logfilter').value.trim().toLowerCase();
+    return !filter || entry.text.toLowerCase().includes(filter);
+  }
+
+  /**
+   * One row. The timestamp and the identifier are their own columns and the
+   * message is a flex child that wraps inside its own column — which is what
+   * gives a wrapped line a hanging indent instead of the continuation running
+   * back under the timestamp where it reads as a new entry (F5).
+   */
+  function logRow(entry) {
+    const el = document.createElement('div');
+    el.className = `jline jline--${entry.pri == null ? 'note' : `p${entry.pri}`}`;
+    if (entry.pri == null) {
+      el.textContent = entry.msg;
+      return el;
+    }
+    const time = document.createElement('span');
+    time.className = 'jline__t';
+    time.textContent = clockOf(entry);
+    if (entry.time) time.title = entry.time.toISOString();
+
+    const who = document.createElement('span');
+    who.className = 'jline__i';
+    who.textContent = entry.ident ? `${entry.ident}${entry.pid ? `[${entry.pid}]` : ''}` : '';
+    who.title = who.textContent;
+
+    const msg = document.createElement('span');
+    msg.className = 'jline__m';
+    msg.textContent = entry.msg;
+
+    // The severity as a word as well as a colour: colour is never the only
+    // signal, and "err" in the tooltip is what makes a screenshot readable.
+    el.title = `${PRIORITY_WORD[entry.pri] || 'log'}${entry.time ? ` · ${entry.time.toISOString()}` : ''}`;
+    el.append(time, who, msg);
+    return el;
   }
 
   /** A chunk can split a line anywhere, so the tail is held until it completes. */
@@ -452,46 +637,109 @@ export function openServices(startUnit = null) {
     const parts = pending.split('\n');
     pending = parts.pop();
 
-    const filter = $('logfilter').value.toLowerCase();
     const box = $('log');
-    // "Am I at the bottom" is decided before appending, or every new line
-    // would look like the user had scrolled away.
-    const stick = $('follow').checked && box.scrollHeight - box.scrollTop - box.clientHeight < 60;
-
     const frag = document.createDocumentFragment();
+    let added = 0;
     for (const line of parts) {
-      if (!line.trim()) continue;
-      logLines.push(line);
-      if (filter && !line.toLowerCase().includes(filter)) continue;
-      frag.appendChild(logRow(line));
+      const entry = parseLine(line);
+      if (!entry) continue;
+      logLines.push(entry);
+      if (!passes(entry)) continue;
+      frag.appendChild(logRow(entry));
+      added += 1;
     }
+    if (!added && !parts.length) return;
     box.appendChild(frag);
 
     if (logLines.length > MAX_LOG_LINES) logLines = logLines.slice(-MAX_LOG_LINES);
     while (box.childElementCount > MAX_LOG_LINES) box.removeChild(box.firstElementChild);
-    if (stick) box.scrollTop = box.scrollHeight;
-  }
 
-  function logRow(line) {
-    const el = document.createElement('div');
-    el.className = `jline${/\b(error|failed|fatal|critical|denied)\b/i.test(line) ? ' jline--bad'
-      : /\b(warn|warning|deprecated)\b/i.test(line) ? ' jline--warn' : ''}`;
-    el.textContent = line;
-    return el;
+    if (pinned) box.scrollTop = box.scrollHeight;
+    else unseen += added;
+    updateJump();
   }
 
   function reflowLog() {
-    const filter = $('logfilter').value.toLowerCase();
     const box = $('log');
     box.innerHTML = '';
     const frag = document.createDocumentFragment();
-    for (const line of logLines) {
-      if (filter && !line.toLowerCase().includes(filter)) continue;
-      frag.appendChild(logRow(line));
+    for (const entry of logLines) {
+      if (passes(entry)) frag.appendChild(logRow(entry));
     }
     box.appendChild(frag);
+    // Re-filtering is a deliberate act, so it lands you at the newest match.
+    pinned = true;
+    unseen = 0;
     box.scrollTop = box.scrollHeight;
+    updateJump();
   }
+
+  /* ─────────────────────────────────── pause, jump, copy, download ─────── */
+
+  function updateJump() {
+    const jump = $('logjump');
+    jump.classList.toggle('is-hidden', pinned);
+    $('logjumpn').textContent = unseen ? ` · ${unseen > 999 ? '999+' : unseen} new` : '';
+  }
+
+  $('log').addEventListener('scroll', () => {
+    const box = $('log');
+    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 24;
+    if (atBottom === pinned && !(atBottom && unseen)) return;
+    pinned = atBottom;
+    if (atBottom) unseen = 0;
+    updateJump();
+  });
+
+  $('logjump').addEventListener('click', () => {
+    const box = $('log');
+    box.scrollTop = box.scrollHeight;
+    pinned = true;
+    unseen = 0;
+    updateJump();
+    box.focus();
+  });
+
+  /** What Copy and Download hand over: exactly what is on screen, filters and
+   *  priority floor included. Copying a buffer that differs from the view is a
+   *  good way to paste the wrong thing into an incident channel. */
+  const visibleText = () => logLines.filter(passes).map((e) => e.text).join('\n');
+
+  $('logcopy').addEventListener('click', async () => {
+    const body = visibleText();
+    if (!body) return toast('Nothing to copy yet.', 'bad');
+    const count = body.split('\n').length;
+    try {
+      await navigator.clipboard.writeText(body);
+      return toast(`Copied ${count} line${count === 1 ? '' : 's'}.`, 'good');
+    } catch { /* no async clipboard on a plain-http origin; fall back */ }
+    try {
+      const scratch = document.createElement('textarea');
+      scratch.value = body;
+      scratch.style.cssText = 'position:fixed;top:-1000px';
+      document.body.appendChild(scratch);
+      scratch.select();
+      const ok = document.execCommand('copy');
+      scratch.remove();
+      toast(ok ? `Copied ${count} lines.` : 'Could not copy — use Download instead.', ok ? 'good' : 'bad');
+    } catch {
+      toast('Could not copy — use Download instead.', 'bad');
+    }
+  });
+
+  $('logdownload').addEventListener('click', () => {
+    const body = visibleText();
+    if (!body) return toast('Nothing to download yet.', 'bad');
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const name = `${state.selected || 'journal'}-${session.label.replace(/[^\w.-]+/g, '_')}-${stamp}.log`;
+    const url = URL.createObjectURL(new Blob([`${body}\n`], { type: 'text/plain;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = name;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    toast(`Saved ${name}`, 'good');
+  });
 
   /* ─────────────────────────────────────────────────────────── unit file ─ */
 
@@ -618,10 +866,22 @@ export function openServices(startUnit = null) {
     if (state.tab === 'file' && !state.file) loadFile();
   });
 
+  // Follow, line count and time window all change what the server is asked for,
+  // so they restart the stream. The text filter and the priority floor only
+  // change what is shown, so they repaint the buffer we already have — which is
+  // what makes narrowing to "errors only" instant instead of a round trip.
   $('follow').addEventListener('change', startLogs);
   $('loglines').addEventListener('change', startLogs);
+  $('logspan').addEventListener('change', startLogs);
+  $('logpri').addEventListener('change', reflowLog);
   $('logfilter').addEventListener('input', reflowLog);
-  $('logclear').addEventListener('click', () => { logLines = []; $('log').innerHTML = ''; });
+  $('logclear').addEventListener('click', () => {
+    logLines = [];
+    $('log').innerHTML = '';
+    pinned = true;
+    unseen = 0;
+    updateJump();
+  });
 
   $('which').addEventListener('change', loadFile);
   $('filereload').addEventListener('click', loadFile);
@@ -643,6 +903,19 @@ export function openServices(startUnit = null) {
     return true;
   };
   win.onForceClose = stopLogs;
+
+  // The unit, the scope and the tab: what "this window was showing" means here.
+  win.restore = () => ({ app: 'services', unit: state.selected, scope: state.scope, tab: state.tab });
+
+  // The scope segmented control is markup-default 'system'; a restore may have
+  // asked for 'user', and the list below is about to be fetched for it.
+  win.body.querySelectorAll('[data-role="scope"] .segmented__btn')
+    .forEach((b) => b.classList.toggle('is-active', b.dataset.scope === state.scope));
+  // The overview card opens this window already narrowed to "failed": landing on
+  // the full list of 400 units and being told to find the broken one yourself is
+  // exactly the step the card exists to remove.
+  $('filter').value = state.filter;
+  syncTab();
 
   loadList();
   return win;

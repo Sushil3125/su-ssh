@@ -157,10 +157,42 @@ const KIND_BADGE = {
 };
 
 /**
- * One row per forward. `queued` rows are the greeter's: they have no id, no
- * traffic, and no live status yet — only an intention.
+ * The address a running forward actually answers on — the reason the tunnel
+ * exists, and until now the one thing the Ports app would not tell you (F11/S5).
+ *
+ * `listenPort` rather than `bindPort`: when the user asks for port 0 the relay
+ * picks one, and showing the requested port would hand somebody a
+ * `localhost:0` to paste into a config file.
+ *
+ * Only a local forward is openable in a browser. A SOCKS proxy is something you
+ * point a browser *at*, not somewhere you navigate to, and a remote forward
+ * listens on the server, where this browser has no route. Both still get a
+ * copyable address, because pasting it somewhere is the whole job.
  */
-export function forwardRowHtml(fwd, { queued = false } = {}) {
+export function forwardAddress(fwd) {
+  const port = fwd.listenPort || fwd.bindPort || fwd.remotePort;
+  if (!port || String(port) === '0') return null;
+  if (fwd.kind === 'local') {
+    const host = fwd.bindAddr || '127.0.0.1';
+    return { text: `${host}:${port}`, url: `http://${host}:${port}`, note: 'listening on this machine' };
+  }
+  if (fwd.kind === 'dynamic') {
+    return { text: `socks5://${fwd.bindAddr || '127.0.0.1'}:${port}`, url: null, note: 'SOCKS5 proxy on this machine' };
+  }
+  return { text: `${fwd.remoteAddr || '127.0.0.1'}:${port}`, url: null, note: 'listening on the server' };
+}
+
+/** The same words the greeter uses, so "queued" means one thing in both places. */
+const STATUS_WORD = {
+  queued: 'queued', active: 'active', error: 'failed', stopped: 'closed', unknown: 'unknown',
+};
+
+/**
+ * One row per forward. `queued` rows are the greeter's: they have no id, no
+ * traffic, and no live status yet — only an intention. `actions` adds the
+ * copy/open buttons, which only the live Ports app can offer.
+ */
+export function forwardRowHtml(fwd, { queued = false, actions = false } = {}) {
   const status = queued ? 'queued' : (fwd.status || 'unknown');
   const traffic = queued
     ? 'opens when you connect'
@@ -170,6 +202,19 @@ export function forwardRowHtml(fwd, { queued = false } = {}) {
     + `${icon('upload', { size: 12 })}<span>${formatBytes(fwd.bytesOut || 0)}</span></span>`;
   const badge = KIND_BADGE[fwd.kind] || { name: 'circle-alert', label: 'Unknown forward kind' };
 
+  const addr = actions && status === 'active' ? forwardAddress(fwd) : null;
+  const addrLine = addr
+    ? `<div class="fwd-row__addr"><code>${escapeHtml(addr.text)}</code><em>${escapeHtml(addr.note)}</em></div>`
+    : '';
+  const addrActions = addr
+    ? `<button class="fwd-row__act" data-act="copy" data-addr="${escapeHtml(addr.text)}"
+               title="Copy ${escapeHtml(addr.text)}" aria-label="Copy address ${escapeHtml(addr.text)}">Copy</button>`
+      + (addr.url
+        ? `<button class="fwd-row__act" data-act="open" data-url="${escapeHtml(addr.url)}"
+                   title="Open ${escapeHtml(addr.url)} in a new tab" aria-label="Open ${escapeHtml(addr.url)} in a browser tab">Open</button>`
+        : '')
+    : '';
+
   return `
     <div class="fwd-row fwd-row--${status}" data-id="${escapeHtml(fwd.id || '')}">
       <span class="fwd-row__badge" role="img" title="${badge.label}" aria-label="${badge.label}">${icon(badge.name, { size: 15 })}</span>
@@ -178,9 +223,11 @@ export function forwardRowHtml(fwd, { queued = false } = {}) {
           ${fwd.label ? `<strong>${escapeHtml(fwd.label)}</strong>` : ''}
           <code>${escapeHtml(fwd.description || describeSpec(fwd))}</code>
         </div>
+        ${addrLine}
         <div class="fwd-row__meta">${escapeHtml(traffic)}${bytes}${fwd.error ? ` · ${escapeHtml(fwd.error)}` : ''}</div>
       </div>
-      <span class="fwd-row__status">${status}</span>
+      <div class="fwd-row__acts">${addrActions}</div>
+      <span class="fwd-row__status fwd-row__status--${status}">${STATUS_WORD[status] || escapeHtml(status)}</span>
       ${iconButton('x', `${queued ? 'Remove from the queue' : 'Close forward'}: ${fwd.description || describeSpec(fwd)}`,
         { size: 14, className: 'fwd-row__x', attrs: 'data-act="remove"' })}
     </div>`;

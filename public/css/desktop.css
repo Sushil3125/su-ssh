@@ -113,6 +113,9 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   place-items: center;
   padding: 24px;
   overflow-y: auto;
+  /* The decorative glow is 620px wide and absolutely positioned; without this
+     it is what the greeter's horizontal scrollbar was measuring at 400px. */
+  overflow-x: hidden;
   background:
     radial-gradient(120% 90% at 15% 0%, #6B2657 0%, transparent 58%),
     radial-gradient(100% 80% at 100% 100%, #3A0F30 0%, transparent 60%),
@@ -229,12 +232,16 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   background: rgba(0, 0, 0, 0.44);
 }
 
-.field-row { display: flex; gap: 10px; }
-.field--grow { flex: 1; }
+.field-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.field--grow { flex: 1; min-width: 0; }
 .field--port { width: 88px; flex: none; }
 
+/* `flex: 1` with no wrap meant four buttons whose text will not fit simply
+   overflowed the card, and the whole greeter scrolled sideways at 400px (F8).
+   Wrapping into two rows is the honest answer; nothing is pushed off-screen. */
 .segmented {
   display: flex;
+  flex-wrap: wrap;
   gap: 3px;
   padding: 3px;
   border: 1px solid var(--line);
@@ -242,7 +249,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   background: rgba(0, 0, 0, 0.3);
 }
 .segmented__btn {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 7px 4px;
   border: 0;
   border-radius: 6px;
@@ -636,6 +644,46 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 }
 .ws-banner__text { flex: 1; min-width: 0; }
 
+/* "Here is what came back after the refresh." Same place as the drop banner,
+   but informational rather than alarming, and it lives in one session's own
+   layer so a restore on staging is never announced on the prod desktop. */
+/* Bottom, not top: the drop banner is an alarm and belongs over everything,
+   but this is a report, and at the top it sat across the toolbar of the very
+   window it had just restored. */
+.ws-notice {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4800;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(760px, calc(100% - 24px));
+  padding: 9px 8px 9px 12px;
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--orange);
+  border-radius: 9px;
+  background: rgba(38, 33, 36, 0.97);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .5);
+  font-size: 12.5px;
+  pointer-events: auto;
+}
+.ws-notice__text { flex: 1; min-width: 0; }
+.ws-notice__acts { display: flex; gap: 6px; flex: none; }
+.ws-notice__acts:empty { display: none; }
+.ws-notice__x {
+  flex: none;
+  min-width: 24px;
+  min-height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+.ws-notice__x:hover { background: var(--chrome-lift); color: var(--ink); }
+
 /* Inline "this stream died" strip above a terminal. */
 .term-lost {
   display: flex;
@@ -801,6 +849,99 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 
 .desktop__hint { margin-top: 18px; font-size: 12.5px; color: rgba(255, 255, 255, 0.42); }
 
+/* ---- per-session overview card (C1) ----------------------------------- */
+
+/* The desktop's largest region used to carry one line of grey text. This is
+   the four things you open a box to check, each one a link into the app that
+   can act on it, wearing the session's colour so the numbers can only be read
+   as belonging to the host named on the card. */
+.desktop__cards { margin-bottom: 18px; }
+.ovcard {
+  width: min(680px, 100%);
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--session-color, var(--orange));
+  border-radius: 12px;
+  background: rgba(24, 19, 22, 0.66);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .35);
+  padding: 12px 14px 14px;
+}
+.ovcard.is-hidden { display: none; }
+
+.ovcard__head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+.ovcard__title { margin: 0; font-size: 14.5px; font-weight: 500; }
+.ovcard__sub {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ovcard__refresh {
+  flex: none;
+  min-width: 24px;
+  min-height: 24px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+.ovcard__refresh:hover { border-color: var(--orange); color: var(--ink); }
+.ovcard__note { margin: 0; font-size: 12.5px; color: var(--ink-muted); }
+
+.ovcard__tiles { display: flex; flex-wrap: wrap; gap: 8px; }
+.ovtile {
+  flex: 1 1 140px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(0, 0, 0, .22);
+  color: var(--ink);
+  text-align: left;
+}
+button.ovtile:hover { border-color: var(--orange); background: rgba(233, 84, 32, .14); }
+.ovtile--static { cursor: default; }
+.ovtile em {
+  font-style: normal;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--ink-muted);
+}
+.ovtile strong {
+  font-size: 19px;
+  font-weight: 500;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* Two lines rather than an ellipsis: "of 195 loaded · 21 running" cut to
+   "of 195 loaded · 2…" loses the number the tile is there to give. */
+.ovtile span {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--ink-muted);
+  max-width: 100%;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+/* Tone is on the number, never on the tile alone: the label above it always
+   says which measurement is being coloured. */
+.ovtile--ok strong   { color: #7fe0ab; }
+.ovtile--warn strong { color: #ffd75e; }
+.ovtile--bad strong  { color: #ff8a94; }
+.ovtile--bad { border-color: rgba(192, 28, 40, .5); background: rgba(192, 28, 40, .12); }
+
 /* ============================================================== windows ==== */
 
 /* The window area starts below the top bar and right of the rail + dock, so a
@@ -905,6 +1046,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .tbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 7px 9px;
   border-bottom: 1px solid var(--line);
@@ -926,7 +1068,10 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .tbar__btn:hover:not([disabled]) { background: rgba(255, 255, 255, 0.14); }
 .tbar__btn[disabled] { opacity: 0.35; cursor: not-allowed; }
 .tbar__path {
-  flex: 1;
+  /* A path field that refuses to shrink pushes the ＋ and ⬆ buttons off the
+     right edge of a 360px card — which is where F8 found them. */
+  flex: 1 1 140px;
+  min-width: 0;
   height: 29px;
   padding: 0 11px;
   border: 1px solid var(--line);
@@ -1074,6 +1219,60 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .toast--good { border-left-color: var(--green); }
 @keyframes slidein { from { opacity: 0; transform: translateX(20px); } }
 
+/* Which window the taskbar button belongs to is useful at every width; below
+   the breakpoint, where the taskbar is the only switcher, it is essential. */
+.dock__task.is-active { border-color: var(--line-strong); background: rgba(255, 255, 255, .16); color: var(--ink); }
+
+/* ---- responsive: below 900px a window becomes a card -------------------- */
+
+/*
+ * S4/F8. Above this width the desktop metaphor pays for itself; below it the
+ * windows kept their desktop offsets and ran off the right edge, and a 960px
+ * Services window could not be seen whole at any scroll position.
+ *
+ * So below the breakpoint there is no window *manager* — there is one full-bleed
+ * card at a time and the taskbar is the switcher. The windows are not closed,
+ * re-created or moved: the same elements, the same sockets, the same unsaved
+ * buffers, shown differently. Geometry is overridden rather than rewritten, so
+ * widening the browser again brings the original layout straight back.
+ *
+ * This is written as a laptop rule, not a phone rule: 900px is a half-width
+ * browser on a 1080p screen, which is where a sysadmin actually meets it.
+ */
+@media (max-width: 900px) {
+  .win {
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    border-radius: 0;
+    border-width: 0;
+    box-shadow: none;
+    animation: none;
+  }
+  /* One at a time. wm.js keeps something focused whenever windows exist, so
+     this never hides the last card and leaves a full taskbar over an empty
+     desktop. */
+  .win:not(.is-focused) { display: none; }
+  .win__grip { display: none; }
+  .win__bar { cursor: default; }
+  /* The identity stripe moves to the top edge: at full bleed the left edge is
+     the screen edge and a 3px inset line there reads as a rendering artefact. */
+  .win.is-focused .win__bar { box-shadow: inset 0 3px 0 var(--session-color, transparent); }
+
+  .ws-notice, .ws-banner { max-width: calc(100% - 16px); }
+  .ws-notice { flex-wrap: wrap; }
+
+  /* The taskbar is now the only way between windows, so which one you are on
+     has to be visible in it. */
+  .dock__task.is-active {
+    border-color: var(--orange);
+    background: rgba(233, 84, 32, .22);
+    color: var(--ink);
+  }
+}
+
+
 /* ---- responsive: below 720px the dock goes horizontal ------------------ */
 
 @media (max-width: 720px) {
@@ -1109,9 +1308,37 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
     border-top: 1px solid var(--line);
   }
   .dock__rule { width: 1px; height: 30px; margin: auto 4px; }
-  .dock__running { flex-direction: row; }
+  /* The taskbar is the window switcher at this width, so it gets the room the
+     launchers do not need. Without the flex/min-width pair it collapsed to its
+     minimum — three 40px buttons crushed into 45px behind their own scrollbar,
+     which is not a switcher. */
+  .dock__running {
+    flex: 1 1 auto;
+    min-width: 0;
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+  }
+  /* A visible (thin) scrollbar when it genuinely overflows: a switcher that
+     scrolls without saying so is a switcher that hides windows. */
+  .dock__running::-webkit-scrollbar { height: 3px; }
+  .dock__running::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 999px; }
+  .dock__tasks { flex-direction: row; }
+  .dock { justify-content: flex-start; }
+  .dock__item { flex: none; }
+  .dock__task { width: 38px; height: 38px; flex: none; }
+  /* Five launchers at 50px leave 100px for the switcher on a 360px screen.
+     44px buys room for four windows before it has to scroll. */
+  .dock__item { width: 44px; height: 44px; }
+  .dock__item svg { width: 22px; height: 22px; }
   .dock__label { display: none; }
   .win { border-radius: 0; }
+
+  /* At card width the top bar's chip is the session identity and only one
+     session's windows exist on screen, so a title-bar host label truncated to
+     "u@…" costs the window title space and says nothing. */
+  .win__host { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1166,7 +1393,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   gap: 10px;
   margin-top: 10px;
 }
-.fwd-form__grid .field { flex: 1 1 190px; margin: 0; }
+.fwd-form__grid .field { flex: 1 1 190px; min-width: 0; margin: 0; }
 .fwd-form__grid .field--port { flex: 0 0 92px; }
 .fwd-form__grid .field.is-hidden { display: none; }
 .fwd-form__grid .field em { color: var(--ink-muted); font-style: normal; }
@@ -1225,17 +1452,73 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.fwd-row__title code { font-family: var(--font-mono); font-size: 12px; color: var(--ink-muted); }
+/* The ellipsis is on .fwd-row__title, but a flex child defaults to min-width:auto
+   and will happily push past it — visible only at card widths. */
+.fwd-row__title code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+/* flex + gap so the byte counters can carry their arrow icons inline. */
 .fwd-row__meta { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-muted); margin-top: 2px; }
 .fwd-row__bytes { display: inline-flex; align-items: center; gap: 3px; }
 .fwd-row__bytes .icon { opacity: .8; }
-.fwd-row__status {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: .04em;
-  color: var(--ink-muted);
-  flex: none;
+
+/* The address the tunnel answers on: the reason it exists, so it reads as the
+   row's content rather than as more metadata (S5). */
+.fwd-row__addr {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 3px;
+  min-width: 0;
 }
+.fwd-row__addr code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, .07);
+  border-radius: 5px;
+  padding: 1px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fwd-row__addr em { font-style: normal; font-size: 11px; color: var(--ink-muted); white-space: nowrap; }
+
+.fwd-row__acts { display: flex; gap: 4px; flex: none; }
+.fwd-row__acts:empty { display: none; }
+.fwd-row__act {
+  min-height: 24px;
+  padding: 3px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: 11.5px;
+}
+.fwd-row__act:hover { border-color: var(--orange); color: var(--ink); background: rgba(233, 84, 32, .14); }
+
+/* Queued and active were the same grey word in the same place; a badge that
+   carries the state's colour makes "not open yet" visible without reading. */
+.fwd-row__status {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.fwd-row__status--active  { color: #7fe0ab; border-color: rgba(38, 162, 105, .55); background: rgba(38, 162, 105, .18); }
+.fwd-row__status--queued  { color: #ffc49b; border-color: rgba(233, 84, 32, .55); background: rgba(233, 84, 32, .16); }
+.fwd-row__status--error   { color: #ff8a94; border-color: rgba(192, 28, 40, .6);  background: rgba(192, 28, 40, .2); }
+.fwd-row__status--stopped { opacity: .75; }
 .fwd-row__x {
   display: grid;
   place-items: center;
@@ -1249,6 +1532,19 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   border-radius: 6px;
 }
 .fwd-row__x:hover { background: var(--red); color: #fff; }
+
+/* At card width a forward row cannot be one line: badge, title, address, the
+   Copy/Open pair, a status badge and a close button do not fit in 316px, and
+   squeezing them left the address — the thing the row exists to show — one
+   character wide with the caption printed through it. Actions drop to their
+   own line instead. */
+@media (max-width: 720px) {
+  .fwd-row { flex-wrap: wrap; align-items: flex-start; }
+  .fwd-row__main { flex: 1 1 55%; }
+  .fwd-row__addr { flex-wrap: wrap; gap: 2px 8px; }
+  .fwd-row__acts { order: 5; flex: 1 1 100%; }
+  .fwd-row__act { flex: 1 1 auto; }
+}
 
 .fwd-empty {
   margin: 0;
@@ -1266,12 +1562,15 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   flex-direction: column;
   overflow: hidden;
 }
-.fwd-app__list { flex: 1; overflow-y: auto; padding: 12px; }
+.fwd-app__list { flex: 1; overflow-y: auto; padding: 8px 12px 12px; }
+/* The form is above the list now (S5). It collapses so that once the tunnels
+   you wanted are open, the list can own the window again. */
 .fwd-app__new {
-  border-top: 1px solid var(--line);
-  padding: 12px;
+  flex: none;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 12px 12px;
   background: var(--chrome-sink);
-  max-height: 58%;
+  max-height: 62%;
   overflow-y: auto;
 }
 .fwd-app__h {
@@ -1281,6 +1580,24 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   letter-spacing: .06em;
   color: var(--ink-muted);
   font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+}
+.fwd-app__h::-webkit-details-marker { display: none; }
+.fwd-app__h::before {
+  content: "\25B8";
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform .15s var(--ease);
+}
+.fwd-app__new[open] > .fwd-app__h::before { transform: rotate(90deg); }
+.fwd-app__listhead {
+  flex: none;
+  padding: 10px 12px 2px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ink-muted);
 }
 
 /* ══════════════════════════════════════════════════ modal (secrets) ════ */
@@ -1466,6 +1783,10 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .svc__toggle { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-muted); }
 .svc__logstate { margin-left: auto; font-size: 11px; color: var(--ink-muted); text-transform: uppercase; letter-spacing: .05em; }
 
+/* The log box and the jump button share a stacking context so the button can
+   float over the newest lines without being scrolled away with them. */
+.svc__logwrap { position: relative; flex: 1; min-height: 0; display: flex; }
+
 .svc__log {
   flex: 1;
   min-height: 0;
@@ -1475,11 +1796,84 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.45;
+  /* The browser default is a light scrollbar on a near-black surface, which is
+     the brightest thing in the window and sits right next to the text (F5). */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(233, 84, 32, .45) transparent;
 }
-.jline { padding: 0 12px; white-space: pre-wrap; word-break: break-word; color: #D8D2D4; }
+.svc__log::-webkit-scrollbar { width: 11px; height: 11px; }
+.svc__log::-webkit-scrollbar-track { background: transparent; }
+.svc__log::-webkit-scrollbar-thumb {
+  background: rgba(233, 84, 32, .38);
+  border: 3px solid #1B1719;
+  border-radius: 999px;
+}
+.svc__log::-webkit-scrollbar-thumb:hover { background: rgba(233, 84, 32, .62); }
+.svc__log:focus-visible { outline-offset: -2px; }
+
+/* Columns, not one wrapped string: the message is its own flex child, so a
+   line that wraps hangs under itself instead of running back beneath the
+   timestamp where the continuation reads as a new entry. */
+.jline {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 12px;
+  color: #D8D2D4;
+  border-left: 2px solid transparent;
+}
 .jline:hover { background: rgba(255, 255, 255, 0.04); }
-.jline--bad { color: #ff8a94; }
-.jline--warn { color: #ffd75e; }
+.jline__t { flex: none; color: #8C8288; font-variant-numeric: tabular-nums; }
+.jline__i {
+  flex: none;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #A78FA0;
+}
+.jline__m { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Severity from the journal's own PRIORITY field, not from the words in the
+   message. emerg/alert/crit get the band as well as the colour, because at
+   those levels "did I scroll past one" is the question being asked. */
+.jline--p0, .jline--p1, .jline--p2 {
+  color: #ff8a94;
+  background: rgba(192, 28, 40, .14);
+  border-left-color: var(--red);
+  font-weight: 500;
+}
+.jline--p3 { color: #ff8a94; border-left-color: rgba(192, 28, 40, .7); }
+.jline--p4 { color: #ffd75e; border-left-color: rgba(245, 194, 17, .6); }
+.jline--p5 { color: #EDE7E9; }
+.jline--p6 { color: #D8D2D4; }
+.jline--p7 { color: #8C8288; }
+/* journalctl's own output — "-- No entries --", boot separators, a sudo
+   complaint from the merged stderr. Not a record, so not a severity. */
+.jline--note { color: #A4989E; font-style: italic; white-space: pre-wrap; }
+
+/* Reading something means scrolling up, which pauses the view. This is how you
+   get back, and how you know what you missed while you were reading. */
+.svc__jump {
+  position: absolute;
+  right: 18px;
+  bottom: 12px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 5px 12px;
+  border: 1px solid rgba(233, 84, 32, .6);
+  border-radius: 999px;
+  background: rgba(46, 41, 44, .96);
+  color: var(--ink);
+  font-size: 11.5px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .5);
+}
+.svc__jump:hover { background: var(--orange); border-color: var(--orange); }
+.svc__jump__n { color: var(--orange-lift); font-variant-numeric: tabular-nums; }
+.svc__jump:hover .svc__jump__n { color: #fff; }
 
 .svc__path { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .svc__filenote { margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--line); background: rgba(245, 194, 17, .08); font-size: 12px; }
@@ -1500,7 +1894,13 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 
 @media (max-width: 720px) {
   .svc { flex-direction: column; }
-  .svc__side { width: auto; max-height: 45%; border-right: 0; border-bottom: 1px solid var(--line); }
+  /* The unit list is how you *find* a unit; the detail is where the work is.
+     At card width 45% left the log pane with almost no height at all. */
+  .svc__side { width: auto; max-height: 32%; border-right: 0; border-bottom: 1px solid var(--line); }
+  /* Never let the journal collapse to nothing: the detail scrolls instead. */
+  .svc__logwrap { min-height: 240px; }
+  .svc__logbar { gap: 6px; }
+  .svc__logbar .svc__filter { flex: 1 1 auto; min-width: 0; }
 }
 
 /* ══════════════════════════════════════════════ recent connections ═════ */

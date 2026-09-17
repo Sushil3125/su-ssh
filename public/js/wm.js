@@ -37,6 +37,72 @@ const workspaces = new Set();
 let onWindowCountChange = null;
 export function setWindowCountListener(fn) { onWindowCountChange = fn; }
 
+/**
+ * restore.js subscribes: anything that moves, resizes, opens, closes, raises or
+ * minimises a window makes the saved layout stale. Debouncing is the listener's
+ * problem, not ours — this fires when a drag ends, not on every drag frame.
+ */
+let onLayoutChange = null;
+export function setLayoutChangeListener(fn) { onLayoutChange = fn; }
+function layoutChanged(ws) { if (ws) onLayoutChange?.(ws); }
+
+export const allWorkspaces = () => [...workspaces];
+
+/* ──────────────────────────────────────────────── geometry and restore ── */
+
+/**
+ * Below this width a window is not a window: it is a full-bleed card, one at a
+ * time, with the taskbar as the switcher (UX research S4/F8). The number is a
+ * half-width 1080p laptop browser, which is where the desktop offsets first
+ * start clipping — not a phone-only breakpoint.
+ */
+export const NARROW_PX = 900;
+export const isNarrow = () => window.innerWidth <= NARROW_PX;
+
+/**
+ * Geometry handed to the next createWindow call instead of the cascade.
+ *
+ * Restoring happens into a workspace that is still hidden (only one layer is
+ * ever visible), and a hidden layer measures 0×0 — so the cascade maths cannot
+ * run there. Passing the saved rectangle straight through side-steps the
+ * measurement entirely, which is also exactly what "it came back where I left
+ * it" has to mean.
+ */
+let pendingGeometry = null;
+export function withGeometry(geo, fn) {
+  pendingGeometry = geo;
+  try { return fn(); } finally { pendingGeometry = null; }
+}
+
+/** The numbers restore.js writes down. Read from inline style rather than the
+ *  rendered box, so a hidden or maximised window still reports its real place. */
+export function windowGeometry(win) {
+  const el = win.el;
+  return {
+    left: Math.round(parseFloat(el.style.left) || 0),
+    top: Math.round(parseFloat(el.style.top) || 0),
+    width: Math.round(parseFloat(el.style.width) || el.offsetWidth || 720),
+    height: Math.round(parseFloat(el.style.height) || el.offsetHeight || 460),
+    max: el.classList.contains('is-max'),
+    min: el.classList.contains('is-min'),
+    z: Number(el.style.zIndex) || 100,
+  };
+}
+
+/** Re-apply the parts of a saved state that createWindow cannot take. */
+export function applyWindowState(win, { min = false, max = false, z = null } = {}) {
+  win.el.classList.toggle('is-max', !!max);
+  if (z != null) {
+    win.el.style.zIndex = z;
+    win.ws.zTop = Math.max(win.ws.zTop, z);
+  }
+  if (min) {
+    win.el.classList.add('is-min');
+    win.el.classList.remove('is-focused');
+    if (win.ws.lastFocused === win.id) win.ws.lastFocused = null;
+  }
+}
+
 export function createWorkspace({ id, label, color, host }) {
   const layer = document.createElement('div');
   layer.className = 'windows__layer is-hidden';
@@ -102,14 +168,24 @@ export function createWindow({ title, subtitle = '', iconName = 'app-window', wi
   if (!ws) throw new Error('No active session: open a connection first.');
   const id = `win-${++seq}`;
 
-  // Cascade diagonally so a second window never buries the first. The step is
-  // wider than the title bar is tall, so every open window stays clickable.
-  const step = ws.windows.size % 6;
-  const bounds = ws.layer.getBoundingClientRect();
-  const w = Math.min(width, Math.max(320, bounds.width - 40));
-  const h = Math.min(height, Math.max(200, bounds.height - 50));
-  const left = Math.max(12, (bounds.width - w) / 2 - 60 + step * 54);
-  const top = Math.max(8, (bounds.height - h) / 2 - 40 + step * 38);
+  // A restore hands us the rectangle the window had before the refresh; a fresh
+  // window cascades diagonally so a second one never buries the first. The step
+  // is wider than the title bar is tall, so every open window stays clickable.
+  const saved = pendingGeometry;
+  let w, h, left, top;
+  if (saved) {
+    w = Math.max(320, Math.round(saved.width) || width);
+    h = Math.max(200, Math.round(saved.height) || height);
+    left = Math.round(saved.left) || 0;
+    top = Math.max(0, Math.round(saved.top) || 0);
+  } else {
+    const step = ws.windows.size % 6;
+    const bounds = ws.layer.getBoundingClientRect();
+    w = Math.min(width, Math.max(320, bounds.width - 40));
+    h = Math.min(height, Math.max(200, bounds.height - 50));
+    left = Math.max(12, (bounds.width - w) / 2 - 60 + step * 54);
+    top = Math.max(8, (bounds.height - h) / 2 - 40 + step * 38);
+  }
 
   const el = document.createElement('div');
   el.className = 'win';
@@ -149,9 +225,20 @@ export function createWindow({ title, subtitle = '', iconName = 'app-window', wi
   const win = {
     id, el, task, appId, ws,
     session: ws.id,
+    /** The size the user asked for, so a clamp for a narrow viewport is
+     *  reversible when the viewport grows back. */
+    pref: { width: w, height: h },
     body: el.querySelector('.win__body'),
     onClose: null,
     onResize: null,
+    /**
+     * Set by each app to `() => ({ ... })`: the few values that describe what
+     * this window was *showing* (a path, a unit, a tab), so a refresh can put
+     * it back. Geometry is wm's job; content is the app's. A window that never
+     * sets this is remembered as its app with no state, which is still better
+     * than being forgotten.
+     */
+    restore: null,
     setSubtitle: (text) => { el.querySelector('.win__sub').textContent = text; },
     setTitle: (text) => {
       el.querySelector('.win__title').firstChild.textContent = `${text} `;
@@ -181,6 +268,7 @@ export function createWindow({ title, subtitle = '', iconName = 'app-window', wi
   focus(id);
   syncDockRunning();
   onWindowCountChange?.(ws);
+  layoutChanged(ws);
   return win;
 }
 
@@ -197,7 +285,10 @@ function makeDraggable(ws, el, handle) {
   let startX, startY, originLeft, originTop, dragging = false;
 
   handle.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.win__ctl') || el.classList.contains('is-max')) return;
+    // Below the breakpoint a window fills the viewport and has no position to
+    // drag it to; letting the drag run would only write geometry the CSS then
+    // overrides, and the layout would "jump" on the way back to a wide screen.
+    if (e.target.closest('.win__ctl') || el.classList.contains('is-max') || isNarrow()) return;
     dragging = true;
     startX = e.clientX; startY = e.clientY;
     originLeft = el.offsetLeft; originTop = el.offsetTop;
@@ -219,6 +310,7 @@ function makeDraggable(ws, el, handle) {
     if (!dragging) return;
     dragging = false;
     try { handle.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+    layoutChanged(ws);
   };
   handle.addEventListener('pointerup', stop);
   handle.addEventListener('pointercancel', stop);
@@ -229,6 +321,7 @@ function makeResizable(win, grip) {
   let startX, startY, startW, startH, resizing = false;
 
   grip.addEventListener('pointerdown', (e) => {
+    if (isNarrow()) return;      // Full-bleed cards have nothing to resize.
     resizing = true;
     startX = e.clientX; startY = e.clientY;
     startW = el.offsetWidth; startH = el.offsetHeight;
@@ -238,8 +331,11 @@ function makeResizable(win, grip) {
 
   grip.addEventListener('pointermove', (e) => {
     if (!resizing) return;
-    el.style.width = `${Math.max(320, startW + e.clientX - startX)}px`;
-    el.style.height = `${Math.max(200, startH + e.clientY - startY)}px`;
+    const w = Math.max(320, startW + e.clientX - startX);
+    const h = Math.max(200, startH + e.clientY - startY);
+    el.style.width = `${w}px`;
+    el.style.height = `${h}px`;
+    win.pref = { width: w, height: h };
     win.onResize?.();
   });
 
@@ -248,6 +344,7 @@ function makeResizable(win, grip) {
     resizing = false;
     try { grip.releasePointerCapture(e.pointerId); } catch { /* already released */ }
     win.onResize?.();
+    layoutChanged(win.ws);
   };
   grip.addEventListener('pointerup', stop);
   grip.addEventListener('pointercancel', stop);
@@ -257,14 +354,19 @@ export function focus(id) {
   const win = lookup(id);
   if (!win) return;
   const ws = win.ws;
-  for (const w of ws.windows.values()) w.el.classList.remove('is-focused');
+  for (const w of ws.windows.values()) {
+    w.el.classList.remove('is-focused');
+    w.task.classList.remove('is-active');
+  }
   win.el.classList.add('is-focused');
+  win.task.classList.add('is-active');
   win.el.classList.remove('is-min');
   // Only raise a window that is not already on top. Otherwise re-focusing on
   // every session switch would walk z-index upward forever and, worse, make
   // "the layout came back exactly as I left it" quietly untrue.
   if (Number(win.el.style.zIndex) !== ws.zTop) win.el.style.zIndex = ++ws.zTop;
   ws.lastFocused = id;
+  layoutChanged(ws);
 }
 
 function restore(id) {
@@ -277,6 +379,17 @@ function minimise(id) {
   if (!win) return;
   win.el.classList.add('is-min');
   win.el.classList.remove('is-focused');
+  win.task.classList.remove('is-active');
+  // Below the breakpoint only the focused window is on screen, so minimising
+  // the last one must leave *something* focused or the desktop looks empty
+  // with a full taskbar. Fall back to the next window down the stack.
+  if (isNarrow()) {
+    const next = [...win.ws.windows.values()]
+      .filter((w) => w !== win && !w.el.classList.contains('is-min'))
+      .sort((a, b) => (Number(b.el.style.zIndex) || 0) - (Number(a.el.style.zIndex) || 0))[0];
+    if (next) focus(next.id);
+  }
+  layoutChanged(win.ws);
 }
 
 function toggleMax(id) {
@@ -292,6 +405,7 @@ function toggleMax(id) {
   btn.setAttribute('aria-label', label);
   btn.innerHTML = icon(max ? 'copy' : 'square', { size: 13 });
   win.onResize?.();
+  layoutChanged(win.ws);
 }
 
 /**
@@ -360,6 +474,16 @@ export async function closeWindow(id, { force = false } = {}) {
   if (ws.lastFocused === id) ws.lastFocused = null;
   syncDockRunning();
   onWindowCountChange?.(ws);
+  layoutChanged(ws);
+
+  // On a narrow screen the closed card was the only thing visible; without
+  // this the user is dropped on the empty desktop with windows still open.
+  if (isNarrow() && ws === current) {
+    const next = [...ws.windows.values()]
+      .filter((w) => !w.el.classList.contains('is-min'))
+      .sort((a, b) => (Number(b.el.style.zIndex) || 0) - (Number(a.el.style.zIndex) || 0))[0];
+    if (next) focus(next.id);
+  }
 }
 
 /** Close every window of one workspace (defaults to the active one). */
@@ -381,6 +505,72 @@ function syncDockRunning() {
 }
 
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+
+/* ────────────────────────────────────────── viewport changes ──────────── */
+
+/**
+ * Keep every window inside the space that still exists.
+ *
+ * Before this, halving a browser window left the desktop's absolute offsets
+ * untouched: windows kept a 130px left edge and a 960px width and simply ran
+ * off the right edge, with no way to reach them (F8). Now each window is pulled
+ * back in — but against `pref`, the size the user actually chose, so widening
+ * the browser again gives that size back instead of leaving everything stuck at
+ * whatever the narrowest moment allowed.
+ */
+export function clampWindows() {
+  const bounds = layersHost().getBoundingClientRect();
+  if (bounds.width < 40 || bounds.height < 40) return;   // Mid-layout; try again later.
+  let touched = false;
+
+  for (const ws of workspaces) {
+    for (const win of ws.windows.values()) {
+      const el = win.el;
+      const pref = win.pref || { width: el.offsetWidth, height: el.offsetHeight };
+      const w = Math.max(280, Math.min(pref.width, Math.round(bounds.width) - 8));
+      const h = Math.max(180, Math.min(pref.height, Math.round(bounds.height) - 8));
+      const left = clamp(parseFloat(el.style.left) || 0, 0, Math.max(0, bounds.width - w));
+      const top = clamp(parseFloat(el.style.top) || 0, 0, Math.max(0, bounds.height - h));
+
+      if (el.style.width !== `${w}px` || el.style.height !== `${h}px`
+        || el.style.left !== `${left}px` || el.style.top !== `${top}px`) {
+        el.style.width = `${w}px`;
+        el.style.height = `${h}px`;
+        el.style.left = `${left}px`;
+        el.style.top = `${top}px`;
+        win.onResize?.();
+        touched = true;
+      }
+    }
+  }
+  if (touched) layoutChanged(current);
+}
+
+/**
+ * `is-narrow` on <body> rather than CSS alone, because the behaviour change is
+ * not only visual: drag and resize stop, closing a card promotes the next one.
+ * Those are decisions the JS has to know about too.
+ */
+function syncNarrow() {
+  document.body.classList.toggle('is-narrow', isNarrow());
+  clampWindows();
+  // Entering card mode with nothing focused would show the desktop under a full
+  // taskbar; promote the top of the stack instead.
+  if (isNarrow() && current && current.windows.size
+    && ![...current.windows.values()].some((w) => w.el.classList.contains('is-focused'))) {
+    const top = [...current.windows.values()]
+      .filter((w) => !w.el.classList.contains('is-min'))
+      .sort((a, b) => (Number(b.el.style.zIndex) || 0) - (Number(a.el.style.zIndex) || 0))[0];
+    if (top) focus(top.id);
+  }
+}
+
+let resizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(syncNarrow, 90);
+});
+syncNarrow();
 
 export function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) =>

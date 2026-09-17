@@ -26,6 +26,16 @@ function showLocked(err) {
   screen.classList.remove('is-hidden');
 }
 
+/**
+ * Pasting the link into the tab that is already showing this screen is the most
+ * likely next thing anyone does after reading it — and changing only the
+ * fragment never reloads a page, so without this the link appears to do
+ * nothing at all. Reloading re-runs the exchange below with the new key.
+ */
+window.addEventListener('hashchange', () => {
+  if (new URLSearchParams(location.hash.replace(/^#/, '')).get('k')) location.reload();
+});
+
 const params = new URLSearchParams(location.hash.replace(/^#/, ''));
 const key = params.get('k');
 if (key) {
