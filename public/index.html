@@ -191,6 +191,10 @@
   </nav>
 
   <main class="desktop" id="desktop">
+    <!-- One summary card per session, only the active session's is shown. The
+         empty desktop is the largest region of the UI (research F11/C1); this
+         is what it carries instead of one line of grey text. -->
+    <div class="desktop__cards" id="desktop-cards"></div>
     <div class="desktop__icons" id="desktop-icons"></div>
     <div class="desktop__hint" id="desktop-hint">Reading ~/Desktop over SFTP…</div>
   </main>

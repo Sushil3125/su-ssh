@@ -9,8 +9,12 @@ import { connectWithTrust, presentConnectError, isThrottled } from './host-trust
 import { openFiles, openEditor, openTerminal, openViewer, openForwards } from './apps.js';
 import {
   createWorkspace, destroyWorkspace, showWorkspace, useWorkspace, closeAll,
-  setWorkspaceFrozen, setWindowCountListener, escapeHtml,
+  setWorkspaceFrozen, setWindowCountListener, setLayoutChangeListener, escapeHtml,
 } from './wm.js';
+import {
+  noteLayoutChange, installLayoutPersistence, restoreWindows, showRestoreNotice,
+  forgetLayout, clearLayouts,
+} from './restore.js';
 import { toast, contextMenu, confirmDialog, openDialog, modalOpen, GLYPH } from './ui.js';
 import { forwardFormHtml, wireForwardForm, forwardRowHtml } from './forwards.js';
 import { openServices } from './services.js';
@@ -503,8 +507,166 @@ function activate(session) {
   }
   paintIdentity();
   paintDesktopHint(session);
+  paintOverview(session);
+  if (session.status === 'connected') loadOverview(session);
   notify();
   return true;
+}
+
+/* ══════════════════════════════════════════ per-session overview card ══ */
+
+/**
+ * What the empty desktop says about this host (research C1).
+ *
+ * Four numbers a sysadmin opens a box to check — anything failed, how long it
+ * has been up, how full the disk is, what tunnels are open — each one a link
+ * into the app that can do something about it. Every figure comes from an
+ * endpoint the desktop already calls (`/api/system`, `/api/services`,
+ * `/api/forwards`); nothing new is polled. It is refreshed when you switch to
+ * the session and no more often than every 30 seconds, plus on demand from the
+ * card's own button, because a summary that updates itself every two seconds is
+ * a second system monitor, and there is already one in the top bar.
+ *
+ * The card lives per session and carries the session's colour and label, so the
+ * "failed: 2" you are reading can only ever belong to the host named on it.
+ */
+const OVERVIEW_MAX_AGE = 30_000;
+
+function overviewHost() { return document.getElementById('desktop-cards'); }
+
+function paintOverview(session) {
+  for (const el of overviewHost().children) {
+    el.classList.toggle('is-hidden', el.dataset.session !== session?.id);
+  }
+}
+
+function overviewCard(session) {
+  let card = overviewHost().querySelector(`[data-session="${session.id}"]`);
+  if (card) return card;
+
+  card = document.createElement('section');
+  card.className = 'ovcard';
+  card.dataset.session = session.id;
+  card.innerHTML = `
+    <header class="ovcard__head">
+      <h2 class="ovcard__title"></h2>
+      <span class="ovcard__sub"></span>
+      <button class="ovcard__refresh" data-act="refresh" title="Refresh this summary" aria-label="Refresh this summary">⟳</button>
+    </header>
+    <div class="ovcard__tiles" data-role="tiles"></div>`;
+
+  card.addEventListener('click', (e) => {
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (!act) return;
+    // The card belongs to one session and is only on screen while that session
+    // is active, but assert it rather than trust the DOM: every other app
+    // window in this codebase captures its session, and so does this.
+    if (act !== 'refresh' && activeSession()?.id !== session.id) return;
+    if (act === 'refresh') return void loadOverview(session, { force: true });
+    if (act === 'services-failed') return void openServices(null, { filter: 'failed' });
+    if (act === 'services') return void openServices();
+    if (act === 'files') return void openFiles('~');
+    if (act === 'ports') return void openForwards();
+  });
+
+  overviewHost().appendChild(card);
+  return card;
+}
+
+const tile = ({ act = null, tone = '', label, value, note = '' }) => {
+  const cls = `ovtile${tone ? ` ovtile--${tone}` : ''}`;
+  const body = `<em>${escapeHtml(label)}</em><strong>${escapeHtml(String(value))}</strong>`
+    + `<span>${escapeHtml(note)}</span>`;
+  return act
+    ? `<button type="button" class="${cls}" data-act="${act}">${body}</button>`
+    : `<div class="${cls} ovtile--static">${body}</div>`;
+};
+
+/**
+ * `uptime -p` says "up 5 hours, 21 minutes", which wraps onto two lines in a
+ * 140px tile and shoves the row out of alignment. The two largest units in the
+ * shortest form say the same thing: "5h 21m".
+ */
+function compactUptime(raw) {
+  if (!raw || raw === '-') return '—';
+  const parts = [];
+  for (const [, n, unit] of String(raw).matchAll(/(\d+)\s*(year|month|week|day|hour|minute|second)/g)) {
+    parts.push(`${n}${unit[0] === 'm' && unit !== 'month' ? 'm' : unit === 'month' ? 'mo' : unit[0]}`);
+  }
+  return parts.length ? parts.slice(0, 2).join(' ') : String(raw).replace(/^up /, '');
+}
+
+async function loadOverview(session, { force = false } = {}) {
+  const card = overviewCard(session);
+  card.style.setProperty('--session-color', session.color);
+  card.querySelector('.ovcard__title').textContent = session.label;
+  // hostPhrase is "label (user@host)", which reads as a stutter here because the
+  // label is already the heading. Show the target, and only when it adds
+  // something the heading does not already say.
+  const target = `${session.username}@${session.host}${session.port === 22 ? '' : `:${session.port}`}`;
+  const sub = card.querySelector('.ovcard__sub');
+  sub.textContent = target === session.label ? (session.env || '') : target;
+  sub.title = hostPhrase(session);
+
+  if (session.status === 'dropped') {
+    card.querySelector('[data-role="tiles"]').innerHTML =
+      '<p class="ovcard__note">Disconnected — these figures are from before the drop.</p>';
+    return;
+  }
+  if (!force && session.overviewAt && Date.now() - session.overviewAt < OVERVIEW_MAX_AGE) return;
+  session.overviewAt = Date.now();
+
+  const tiles = card.querySelector('[data-role="tiles"]');
+  if (!tiles.childElementCount) tiles.innerHTML = '<p class="ovcard__note">Reading…</p>';
+
+  // One settled batch: a box with no systemd should still show its uptime.
+  const [system, services, forwards] = await Promise.allSettled([
+    session.api.system(), session.api.services('system'), session.api.forwards(),
+  ]);
+  if (activeSession() !== session && !force) return;   // Switched away mid-flight.
+
+  const info = system.status === 'fulfilled' ? system.value : {};
+  const counts = services.status === 'fulfilled' ? services.value.counts : null;
+  const fwd = forwards.status === 'fulfilled' ? forwards.value.forwards : null;
+
+  const disk = /\((\d+)%\)/.exec(info.disk || '');
+  const diskPct = disk ? Number(disk[1]) : null;
+  const active = fwd ? fwd.filter((f) => f.status === 'active').length : null;
+  const failing = fwd ? fwd.filter((f) => f.status === 'error').length : 0;
+
+  tiles.innerHTML = [
+    counts
+      ? tile({
+        act: counts.failed ? 'services-failed' : 'services',
+        tone: counts.failed ? 'bad' : 'ok',
+        label: 'Failed units',
+        value: counts.failed,
+        note: `of ${counts.total} loaded · ${counts.running} running`,
+      })
+      : tile({ act: 'services', label: 'Failed units', value: '—', note: 'systemd did not answer' }),
+
+    tile({
+      label: 'Uptime',
+      value: compactUptime(info.uptime),
+      note: info.distro && info.distro !== '-' ? info.distro : (info.kernel || ''),
+    }),
+
+    tile({
+      act: 'files',
+      tone: diskPct == null ? '' : diskPct >= 90 ? 'bad' : diskPct >= 75 ? 'warn' : 'ok',
+      label: 'Disk',
+      value: diskPct == null ? '—' : `${diskPct}%`,
+      note: info.disk && info.disk !== '-' ? info.disk.replace(/\s*\(\d+%\)$/, '') : 'home filesystem',
+    }),
+
+    tile({
+      act: 'ports',
+      tone: failing ? 'bad' : active ? 'ok' : '',
+      label: 'Forwards',
+      value: active == null ? '—' : active,
+      note: active == null ? 'unavailable' : failing ? `${failing} failed` : 'open tunnels',
+    }),
+  ].join('');
 }
 
 function paintDesktopHint(session) {
@@ -707,6 +869,7 @@ function handleDrop(session, reason = 'connection lost') {
     `Connection to ${hostPhrase(session)} lost (${reason}). Its windows are frozen — nothing here is live.`;
   session.banner.classList.remove('is-hidden');
   toast(`${session.label} disconnected (${reason}).`, 'bad', 8000);
+  loadOverview(session, { force: true });
   if (activeSession() === session) paintIdentity();
   renderRail();
 }
@@ -726,6 +889,8 @@ async function closeDropped(session) {
 /** Tear down a session's client-side state. Does not talk to the relay. */
 function discardSession(session) {
   session.stopMonitor?.();
+  overviewHost().querySelector(`[data-session="${session.id}"]`)?.remove();
+  forgetLayout(session.token);   // Its windows are gone on purpose, not by accident.
   destroyWorkspace(session.workspace);
   removeSession(session);
   notify();
@@ -816,6 +981,7 @@ async function disconnectAll() {
     discardSession(session);
   }
   clearPersisted();
+  clearLayouts();
   await afterSessionRemoved();
   toast('All connections closed.', 'good');
 }
@@ -869,6 +1035,12 @@ initRail({
 
 onChange(() => { renderRail(); paintIdentity(); });
 setWindowCountListener(() => renderRail());
+
+// Every window move, resize, raise, open and close makes the saved layout
+// stale; restore.js coalesces them and writes once, plus once more on the way
+// out of the page. See restore.js for what is kept and what deliberately is not.
+setLayoutChangeListener(noteLayoutChange);
+installLayoutPersistence();
 
 /* ════════════════════════════════════════════════════════ keyboard ═════ */
 
@@ -925,6 +1097,7 @@ startLivenessPoll((session, reason) => handleDrop(session, reason));
 
   if (!restored.length) {
     clearPersisted();
+    clearLayouts();
     if (lost.length) {
       toast(lost.length === 1
         ? `${lost[0]} is no longer connected.`
@@ -933,7 +1106,27 @@ startLivenessPoll((session, reason) => handleDrop(session, reason));
     return;
   }
 
-  activate(restored.find((s) => s.token === activeToken) || restored[0]);
+  // Put each session's windows back before showing anything.
+  //
+  // restoreWindows reads the active session and the active workspace, exactly
+  // as a hand-opened window does, so each one is made current in turn. Their
+  // layers are still hidden at this point — restoring into a hidden layer is
+  // why saved geometry is passed through rather than measured (see wm.js
+  // withGeometry). A window can therefore only land on the session it was
+  // opened on, because that is the only session that was current when it ran.
+  const target = restored.find((s) => s.token === activeToken) || restored[0];
+  const summaries = [];
+  for (const session of restored) {
+    setActive(session);
+    useWorkspace(session.workspace);
+    try { summaries.push(restoreWindows(session)); } catch { /* one bad entry must not cost the rest */ }
+  }
+  setActive(null);
+  activate(target);
+  // After activate, so the notice for the visible session is painted into a
+  // layer that is on screen; the others wait in their own layers.
+  for (const summary of summaries) showRestoreNotice(summary);
+
   if (lost.length) {
     toast(lost.length === 1
       ? `${lost[0]} was no longer connected.`

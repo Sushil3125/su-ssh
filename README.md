@@ -156,10 +156,17 @@ public/
 - Text editor with `Ctrl-S`, unsaved-changes guard, binary-file detection
 - Full interactive terminal with working resize
 - Image viewer
-- Services: search systemd units, stream `journalctl -f` live, edit the unit
-  file or a drop-in override, and start/stop/restart/enable/disable/mask
+- Services: search systemd units, edit the unit file or a drop-in override, and
+  start/stop/restart/enable/disable/mask
+- Journal viewer: lines coloured by the journal's own `PRIORITY` (not by
+  grepping the text), a time window of 15 min / 1 hour / today / this boot / all
+  boots applied server-side as `--since`, a priority floor, a text filter,
+  pause-on-scroll-up with a "jump to latest" count, and Copy / Download of
+  exactly what is on screen
 - Port forwarding: local (`-L`), remote (`-R`) and dynamic SOCKS5 (`-D`),
-  queued on the greeter or added and closed live from the Ports app
+  queued on the greeter or added and closed live from the Ports app; a running
+  forward shows the address it answers on, with Copy and — for a local forward —
+  Open in browser
 - Window manager: drag, resize, focus, minimise, maximise, dock task list
 - Live top-bar meters: CPU, memory, disk space, disk active time, and the
   browser→relay→server round trip
@@ -178,9 +185,33 @@ public/
   session, a dropped host keeps its windows frozen with Reconnect / Close, and a
   terminal or journal stream that dies offers Reconnect where it died
 - Editing a root-owned file in the Editor offers a confirmed `sudo` retry
-- Sessions survive a page refresh (window layout does not); `Disconnect` acts on
-  the active session, and the rail menu can disconnect all of them
-- Responsive below 720px (the dock moves to the bottom, the rail above it)
+- A per-session overview card on the empty desktop: failed units, uptime, disk
+  pressure and open forwards, each clicking through into the relevant app
+- Sessions *and their windows* survive a page refresh — app, geometry,
+  minimise/maximise, z-order and what each window was showing come back on the
+  session they were opened on, and you are told what came back. Terminals are
+  the exception: see below. `Disconnect` acts on the active session, and the
+  rail menu can disconnect all of them
+- The access gate is detected when the page loads, so a browser without this
+  launch's cookie is told to open the printed link instead of finding out after
+  filling in the connect form
+- Responsive: below 900px each window becomes a full-bleed card with the dock's
+  task strip as the switcher, and window geometry is clamped into the viewport
+  as it changes; below 720px the dock moves to the bottom with the rail above it
+
+### Why a refresh does not bring your terminals back
+
+Everything else is a view over a request that can simply be made again — a
+directory listing, a file, a unit's status. A terminal is not: it is a view onto
+a PTY on the far side, and that PTY dies with the WebSocket, which a page reload
+guarantees. Re-opening the window would start a *different* shell — new PID, no
+history, no `cd`, no half-typed command, none of what was on the screen — while
+looking exactly like the one that was there before.
+
+For an audience whose expensive mistake is "my command went somewhere", a
+terminal that silently is not the terminal you left is worse than no terminal.
+So a restored session says how many terminals ended and offers to open a fresh
+one, in the directory the old one was opened at.
 
 ## What does not work, by design
 
@@ -280,6 +311,11 @@ honest about what that means.
 The session token is kept in `sessionStorage` so a refresh does not log you out.
 That is a prototype convenience — any script on this origin can read it. The
 access cookie above is `httpOnly`, so the page cannot read *that*.
+
+Window layout is kept alongside it in `sessionStorage`, keyed by session token:
+which app, its rectangle, and the path, unit or tab it was showing. No file
+contents, no scrollback and no buffers — the same origin caveat applies, so
+nothing worth stealing is written there.
 
 ---
 

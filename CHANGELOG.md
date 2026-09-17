@@ -2,6 +2,101 @@
 
 ## Unreleased
 
+### Window restore after a refresh
+- **A reload no longer empties the desktop.** Every window's app, geometry,
+  minimise/maximise state, z-order and *what it was showing* — Files path,
+  Editor file, Services unit + scope + tab, Ports, Viewer path — is kept in
+  `sessionStorage` per session token, and re-opened on the next load. The
+  restore happens with each session made current in turn, so a restored window
+  can only land on the session it was opened on; a Services window on staging
+  cannot come back on prod.
+- **Terminals are reported, never resurrected.** The PTY behind a terminal dies
+  with the WebSocket, which a reload guarantees. Re-opening the window would
+  give a different shell — new PID, no history, no `cd`, nothing that was on the
+  screen — while looking exactly like the one that was there. So a restored
+  session shows a notice saying how many terminals ended, with a button that
+  opens a fresh one in the directory the old one started in.
+- The notice names the session, lists what came back, says when an Editor's
+  unsaved edits went with the page, and can be dismissed. At most ten windows
+  per session are kept, so the layout can never crowd out the session tokens.
+- Disconnecting a session forgets its layout; "Disconnect all" clears the lot.
+
+### Journal viewer
+- **Priority colouring from the journal, not from the words in the line.** The
+  stream is `journalctl -o json`, so each line carries `PRIORITY` and is coloured
+  by it, with the severity as a word in the row's tooltip. The previous regex
+  over the message text mis-coloured real logs in both directions: on this
+  machine's `systemd-journald.service`, 16 of 18 genuine warnings contain no
+  warning word at all, and two say "Failed" and were painted as errors.
+- **A time window** — last 15 min / last hour / today / this boot / all boots —
+  applied server-side as `--since`, from a fixed table of flags the browser can
+  only choose from by name. Following now says `streaming · this boot` when the
+  window is "all boots", because `journalctl -f` only ever replays the current
+  boot whatever `-n` says.
+- **Pause on scroll-up** with a "Jump to latest · n new" pill. Scrolling up to
+  read something stops the view following without stopping the stream; the
+  buffer keeps filling and the pill counts what you have not seen.
+- **Copy and Download** hand over exactly what is on screen — text filter and
+  priority floor included — as `timestamp identifier[pid]: message` lines.
+- A **priority floor** (all / info / warnings / errors) filters the buffer that
+  is already loaded, so narrowing to "errors only" is instant.
+- Wrapped lines now hang under their own message column instead of running back
+  under the timestamp, and the log's scrollbar is styled rather than the
+  browser's default light-on-black.
+- A non-following read that finishes no longer reports itself as a dropped
+  stream: only an unexpected close gets the red "disconnected · Reconnect".
+
+### Narrow screens
+- **Below 900px a window becomes a full-bleed card, one at a time,** with the
+  dock's task strip as the switcher and the active card marked in it. Nothing is
+  closed or re-created — the same elements, sockets and buffers, shown
+  differently — so widening the browser brings the original layout straight back.
+  Drag and resize are off at card width, and closing or minimising a card
+  promotes the next one rather than dropping you on an empty desktop.
+- **Window geometry is clamped to the viewport on resize,** against the size the
+  user actually chose, so shrinking the browser pulls windows back in and
+  widening it gives their size back. Before, windows kept their desktop offsets
+  and ran off the right edge with no way to reach them.
+- **The greeter no longer scrolls sideways at 400px:** the authentication
+  segmented control wraps instead of overflowing the card, and the decorative
+  glow is clipped rather than scrollable.
+- Card-width fixes found by screenshotting every surface at 360px: the Files
+  toolbar wraps instead of pushing ＋ and ⬆ off the edge, a forward row stacks
+  its Copy/Open actions onto their own line instead of squeezing the address to
+  one character, the Services unit list gives the detail pane more room, and the
+  dock's launchers shrink so the window switcher has space.
+
+### Access gate
+- The relay's per-launch access cookie is **detected on load**. Arriving without
+  it — a bookmark, a second browser, a restarted relay — shows the "open the
+  link printed in your terminal" explanation over the whole viewport instead of
+  letting you fill in six fields and discover it on Connect.
+- Pasting the `#k=` link into the tab already showing that screen now works. A
+  fragment-only change never reloads a page, so it previously did nothing at all.
+
+### Ports
+- **Per-forward Copy address and Open in browser.** A running local forward
+  shows the address it answers on — using the port actually bound, not the one
+  requested, so a `0 = any` forward never hands you `localhost:0`. Local
+  forwards get both buttons; a SOCKS forward gets a copyable `socks5://` address
+  and no "Open", because a proxy is something you point a browser at rather than
+  visit; a remote forward shows the address it listens on *on the server*.
+- **Add is above the fold.** The New forward form moved above the list and
+  collapses, so the app's primary action is no longer the one thing you have to
+  scroll to find in a 560px window.
+- Queued and active no longer read as the same grey word: each status is a
+  coloured badge, and the list header counts both.
+
+### Per-session overview card
+- The empty desktop — the largest region of the UI, previously carrying one line
+  of grey text — now shows a summary of the session it belongs to: failed units,
+  uptime, disk pressure and open forwards, in the session's colour and under its
+  label. Failed units opens Services already filtered to failed, disk opens
+  Files, forwards opens Ports.
+- It reuses `/api/system`, `/api/services` and `/api/forwards`, loads on
+  activation at most once every 30 seconds, and has a refresh button. No new
+  polling.
+
 ### Multi-session switching
 - **Several servers in one tab.** A host rail sits left of the app dock with one
   chip per connection: colour bar, initials, status dot, open-window count and an

@@ -233,6 +233,11 @@ export function openFiles(startPath = '~') {
     ]);
   });
 
+  // What a refresh needs to put this window back: the folder it is looking at.
+  // History is not persisted — Back after a reload leading somewhere the user
+  // never navigated to in this page would be a lie about where they have been.
+  win.restore = () => ({ app: 'files', path: current || startPath });
+
   go(startPath);
   return win;
 }
@@ -267,6 +272,10 @@ export function openEditor(filePath = null) {
 
   async function load(target) {
     if (!target) return;
+    // Show the path we are opening before the read, not after it succeeds: a
+    // failed open used to leave an empty field, so a restored editor whose file
+    // could not be read gave no clue which file it had been showing.
+    pathInput.value = target;
     state.textContent = 'Opening…';
     try {
       const data = await api.read(target);
@@ -376,6 +385,13 @@ export function openEditor(filePath = null) {
       danger: true,
     });
   };
+
+  // The path, and whether there were edits in flight. The buffer itself is not
+  // persisted: re-opening reads the file from the server, so what comes back is
+  // what is actually on the machine. The `dirty` flag exists only so the restore
+  // notice can admit that unsaved edits went with the page instead of quietly
+  // presenting the server's copy as if nothing had happened.
+  win.restore = () => ({ app: 'editor', path: pathInput.value.trim() || null, dirty });
 
   if (filePath) load(filePath);
   return win;
@@ -494,6 +510,11 @@ export function openTerminal(cwd = null) {
   win.onClose = teardown;
   win.onForceClose = teardown;
 
+  // Recorded, never replayed. restore.js will not reopen a terminal — the PTY
+  // behind this one dies with the WebSocket — but it reports that it ended and
+  // uses the directory to make "open a new one" land somewhere useful.
+  win.restore = () => ({ app: 'terminal', cwd });
+
   return win;
 }
 
@@ -517,6 +538,7 @@ export function openViewer(filePath) {
   img.addEventListener('error', () => {
     win.body.querySelector('.viewer').innerHTML = '<div class="empty"><strong>Cannot display this image</strong>The file may be corrupt or unreadable.</div>';
   });
+  win.restore = () => ({ app: 'viewer', path: filePath });
   return win;
 }
 
@@ -535,13 +557,17 @@ export function openForwards() {
   const { api, toast } = session;
   const win = createWindow({ title: 'Port forwarding', icon: '🔀', width: 720, height: 560, appId: 'ports' });
 
+  // "Add" first, list second. In a 560px window the form used to start below
+  // the fold (F11/S5), so the app's primary action was the one thing you had to
+  // scroll to find; the list grows downward and can afford to.
   win.body.innerHTML = `
     <div class="fwd-app">
-      <div class="fwd-app__list" data-role="list"><p class="fwd-empty">No forwards yet.</p></div>
-      <div class="fwd-app__new">
-        <h3 class="fwd-app__h">New forward</h3>
+      <details class="fwd-app__new" data-role="newfold" open>
+        <summary class="fwd-app__h">New forward</summary>
         ${forwardFormHtml()}
-      </div>
+      </details>
+      <div class="fwd-app__listhead" data-role="listhead">Forwards</div>
+      <div class="fwd-app__list" data-role="list"><p class="fwd-empty">No forwards yet.</p></div>
     </div>`;
 
   const list = win.body.querySelector('[data-role="list"]');
@@ -550,16 +576,55 @@ export function openForwards() {
   async function refresh() {
     try {
       const { forwards } = await api.forwards();
-      win.setSubtitle(`— ${forwards.filter((f) => f.status === 'active').length} active`);
+      const active = forwards.filter((f) => f.status === 'active').length;
+      const queued = forwards.filter((f) => f.status === 'queued' || f.status === 'pending').length;
+      win.setSubtitle(`— ${active} active${queued ? `, ${queued} queued` : ''}`);
+      win.body.querySelector('[data-role="listhead"]').textContent = forwards.length
+        ? `Forwards · ${active} active${queued ? ` · ${queued} queued` : ''}`
+        : 'Forwards';
       list.innerHTML = forwards.length
-        ? forwards.map((f) => forwardRowHtml(f)).join('')
-        : '<p class="fwd-empty">No forwards yet. Add one below — it opens straight away.</p>';
+        ? forwards.map((f) => forwardRowHtml(f, { actions: true })).join('')
+        : '<p class="fwd-empty">No forwards yet. Add one above — it opens straight away.</p>';
     } catch (err) {
       list.innerHTML = `<p class="fwd-empty">${escapeHtml(err.message)}</p>`;
     }
   }
 
+  /**
+   * Copy without assuming the async clipboard exists. It does over
+   * http://127.0.0.1 (a secure context), but a relay reached through someone
+   * else's tunnel on a plain http origin has no `navigator.clipboard` at all,
+   * and silently copying nothing is the worst of the three outcomes.
+   */
+  async function copyAddress(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return toast(`Copied ${text}`, 'good');
+    } catch { /* fall through to the old way */ }
+    try {
+      const scratch = document.createElement('textarea');
+      scratch.value = text;
+      scratch.style.cssText = 'position:fixed;top:-1000px';
+      document.body.appendChild(scratch);
+      scratch.select();
+      const ok = document.execCommand('copy');
+      scratch.remove();
+      toast(ok ? `Copied ${text}` : `Could not copy. The address is ${text}`, ok ? 'good' : 'bad', ok ? 3800 : 9000);
+    } catch {
+      toast(`Could not copy. The address is ${text}`, 'bad', 9000);
+    }
+  }
+
   list.addEventListener('click', async (e) => {
+    const copy = e.target.closest('[data-act="copy"]');
+    if (copy) return copyAddress(copy.dataset.addr);
+
+    const open = e.target.closest('[data-act="open"]');
+    if (open) {
+      window.open(open.dataset.url, '_blank', 'noopener');
+      return;
+    }
+
     const btn = e.target.closest('[data-act="remove"]');
     if (!btn) return;
     const row = btn.closest('.fwd-row');
@@ -592,5 +657,6 @@ export function openForwards() {
   timer = setInterval(refresh, 2000);
   win.onClose = () => { clearInterval(timer); };  // The forwards themselves keep running.
   win.onForceClose = () => clearInterval(timer);
+  win.restore = () => ({ app: 'ports' });
   return win;
 }
