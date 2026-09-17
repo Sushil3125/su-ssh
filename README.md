@@ -15,9 +15,11 @@ npx su-ssh
 Open the URL, enter a host, username and credentials, and connect. There is no
 agent to install on the target server: if you can `ssh` into it, this works.
 
-> **Read [Security](#security) before putting this anywhere public.** It accepts
-> SSH credentials over plain HTTP and does not verify remote host keys yet.
-> Bind it to localhost (the default) and tunnel in.
+Open the link it prints: it carries a one-time access key for that launch.
+
+> **Read [Security](#security) before putting this anywhere public.** Without
+> `--tls-cert` it accepts SSH credentials over plain HTTP. Bind it to localhost
+> (the default) and tunnel in, or terminate TLS.
 
 ---
 
@@ -32,6 +34,9 @@ agent to install on the target server: if you can `ssh` into it, this works.
   and closed live without reconnecting
 - **Monitor** — CPU, memory, disk space, disk active time and round-trip latency
   in the top bar, updating every two seconds
+- **Several servers at once** — a host rail beside the dock holds up to eight live
+  connections in one tab, each with its own windows, colour and label; switching
+  closes no socket and loses no unsaved buffer
 
 ---
 
@@ -50,6 +55,16 @@ Options
       --jail <path>     Confine file operations below this path
       --allow-public-forwards
                         Permit port forwards to bind non-loopback addresses
+      --allowed-host <name[:port]>
+                        Also answer to this Host header (repeatable)
+      --idle-timeout <mins>
+                        Close sessions with no open window after this many
+                        idle minutes                 (default 15, 0 = never)
+      --tls-cert <file> / --tls-key <file>
+                        Serve HTTPS instead of HTTP
+      --no-auth         Do not require the per-launch access link
+      --forget-host <host[:port]>
+                        Remove a pinned host key, then exit
 ```
 
 Requires **Node 20+** on the machine running the relay. The remote server needs
@@ -61,6 +76,13 @@ only `sshd`; systemd features additionally need `systemd` and `journalctl`.
 | `BIND`      | `127.0.0.1` | Bind address. Localhost by default, on purpose |
 | `ROOT_JAIL` | *(unset)*   | Confine all file operations to this path |
 | `ALLOW_PUBLIC_FORWARDS` | *(unset)* | Allow forwards to bind non-loopback addresses |
+| `ALLOWED_HOSTS` | *(unset)* | Extra `Host` header values to accept, comma separated |
+| `SESSION_IDLE_MINUTES` | `15` | Close sessions with no open window after this long; `0` never |
+| `MAX_SESSIONS` | `16` | Most SSH sessions the relay will hold at once; further connects get 429 |
+| `TLS_CERT` / `TLS_KEY` | *(unset)* | Serve HTTPS with this certificate and key |
+| `NO_ACCESS_KEY` | *(unset)* | `1` disables the per-launch access link |
+| `KNOWN_HOSTS_FILE` | `~/.config/su-ssh/known_hosts.json` | Where host keys are pinned |
+| `SSH_KNOWN_HOSTS` | `~/.ssh/known_hosts` | Existing known_hosts consulted for already-trusted servers |
 
 Reaching it from another machine — do this rather than setting `BIND=0.0.0.0`:
 
@@ -141,9 +163,24 @@ public/
 - Window manager: drag, resize, focus, minimise, maximise, dock task list
 - Live top-bar meters: CPU, memory, disk space, disk active time, and the
   browser→relay→server round trip
-- Recent connections on the greeter, with relative times and pinning
-- Session survives a page refresh; `Disconnect` tears everything down
-- Responsive below 720px (the dock moves to the bottom)
+- Recent connections on the greeter, with relative times and pinning; a saved
+  entry that needs no secret (agent auth) connects in one click
+- Multi-session: up to eight connections per tab on a host rail, each with its
+  own windows, dock tasks, desktop icons and meters. Switching hides one
+  workspace and shows another — no socket closes, no long-running command dies,
+  no editor buffer is lost. `Alt+Shift+1…8` jumps, `Alt+Shift+[` / `]` cycles,
+  `Alt+Shift+N` adds a connection; none of them reach the terminal
+- Per-host identity: an auto-assigned colour from an eight-colour palette, an
+  editable label and an optional `dev`/`staging`/`prod` tag, shown in the rail
+  chip, the top bar, a colour line across the desktop, every window title and
+  the browser tab title
+- Real connection status: the top-bar dot is live / reconnecting / dropped per
+  session, a dropped host keeps its windows frozen with Reconnect / Close, and a
+  terminal or journal stream that dies offers Reconnect where it died
+- Editing a root-owned file in the Editor offers a confirmed `sudo` retry
+- Sessions survive a page refresh (window layout does not); `Disconnect` acts on
+  the active session, and the rail menu can disconnect all of them
+- Responsive below 720px (the dock moves to the bottom, the rail above it)
 
 ## What does not work, by design
 
@@ -160,10 +197,59 @@ actually needs a GUI app.
 
 ## Security
 
-This prototype is honest about its position: it is a shell exposed over HTTP.
+This is a shell exposed over HTTP on your own machine, and it is built to be
+honest about what that means.
 
 **In place**
 
+- **Access link.** Every launch prints `http://127.0.0.1:3000/#k=<key>`. The key
+  lives in the URL fragment, which browsers never send to a server, so it cannot
+  land in a log or a `Referer`. The page trades it once for an `httpOnly;
+  SameSite=Strict` cookie and strips it from the address bar. Nothing is written
+  to disk; restarting the relay revokes every browser. `--no-auth` turns this off
+  for setups where a reverse proxy authenticates users instead.
+- **DNS-rebinding and cross-site protection.** Every HTTP request and WebSocket
+  upgrade must carry a `Host` header on an allowlist (`localhost`, `127.0.0.1`,
+  `[::1]` and the bind address, each on the listening port, plus anything in
+  `ALLOWED_HOSTS` / `--allowed-host`). State-changing requests and all WebSocket
+  upgrades must also carry an allowed `Origin`, which is the only cross-site
+  barrier a WebSocket has — browsers do not apply CORS to them.
+- **Elevated file writes are explicit, and grant nothing new.** The Editor can
+  save a file the SSH user cannot write: the content goes up over SFTP to a
+  private temp file in that user's own home and is moved into place with
+  `install` under `sudo`, so the password only ever reaches sudo's stdin and the
+  content never reaches a command line. Unlike the unit-file editor, there is no
+  path whitelist — this is a general text editor, and refusing
+  `/etc/nginx/nginx.conf` while allowing `/etc/systemd/system/x.service` would
+  only push people back to a terminal. What keeps that safe is that it is not a
+  privilege escalation: reaching it needs the access cookie, an allowed Host and
+  Origin and a live session token, `sudo` still authenticates as the SSH account
+  and still obeys the target's sudoers, `ROOT_JAIL` applies as it does to every
+  other file call, and the elevated attempt only happens after the user confirms
+  a dialog naming the host (and, for a host tagged `prod`, types its host name).
+  An existing file keeps its owner and mode.
+- **Host key verification**, trust on first use with pinning. An unknown server
+  is refused with its SHA256 fingerprint and key type; the greeter shows them and
+  connects only after you confirm, then pins that exact key in
+  `~/.config/su-ssh/known_hosts.json` (0600). Entries in your own
+  `~/.ssh/known_hosts`, plain or hashed, are honoured, and an `@revoked` entry is
+  refused. A **changed** key is a hard stop with no override in the browser: clear
+  the pin on the relay host with `su-ssh --forget-host host[:port]`.
+- **Rate limiting** on `/api/connect`, per client address: a sliding window of 10
+  attempts a minute, plus a lockout that doubles with each authentication failure
+  (5s, 10s, 20s … capped at 15 minutes) and resets on a successful sign-in. The
+  greeter shows the wait as a countdown.
+- **Idle session reaping.** A closed tab used to leave the SSH connection, its
+  port forwards and its sampler loops running until the relay restarted. Sessions
+  with no open WebSocket and no HTTP activity for `--idle-timeout` minutes
+  (default 15) are destroyed. An open desktop holds the metrics socket, so it is
+  never reaped while you are looking at it.
+- **Optional TLS** with `--tls-cert` / `--tls-key`; the WebSocket URLs follow the
+  page's protocol, and the access cookie is then marked `Secure`.
+- The ssh-agent socket is taken from the relay's own `SSH_AUTH_SOCK` only — a
+  request cannot name a socket for the relay to talk to — and an unreadable key
+  file gives one generic message, so the field cannot be used to probe the relay
+  host's filesystem.
 - Session token required on every API call and on the WebSocket upgrade
 - Path jail via `ROOT_JAIL`, with `realpath` resolved *before* the prefix check,
   so `..` traversal and symlink escapes are both closed
@@ -179,22 +265,21 @@ This prototype is honest about its position: it is a shell exposed over HTTP.
 - The recent-connections list stores only host, port, username and auth method
   — never a credential
 
-**Not in place — needed before this is exposed**
+**Not in place — know these before you expose it**
 
-- **TLS.** Credentials are posted in the clear over plain HTTP. Terminate TLS at
-  a reverse proxy before anything leaves the machine.
-- **Rate limiting** on `/api/connect`. Right now it is an unthrottled brute-force
-  oracle against the target's SSH.
-- **Session expiry.** Tokens live until the relay restarts or you disconnect.
-- **Host key verification.** `ssh2` does not verify the target's host key unless
-  you supply `hostVerifier`. As written, this is trust-on-first-use with no
-  pinning, so it is vulnerable to an active MITM on the relay-to-server hop.
-- **Audit logging.** Only connections are logged, not file operations.
-- **CSRF protection.** The token header helps, but add an explicit origin check.
+- **Plain HTTP unless you configure TLS.** Credentials are posted in the clear
+  without `--tls-cert`/`--tls-key` or a TLS-terminating proxy in front.
+- **Audit logging.** Connections, forwards, systemd actions and refusals are
+  logged; individual file operations are not.
+- **Multi-user separation.** Anyone holding the access link has the whole relay:
+  there are no accounts, roles or per-session ownership.
+- **Rate limiting is per address and in memory.** Behind a reverse proxy every
+  request appears to come from the proxy, so the limiter becomes global; counters
+  reset when the relay restarts.
 
-The token is kept in `sessionStorage` so a refresh does not log you out. That is
-a prototype convenience — any script on this origin can read it. Move it to an
-`httpOnly; Secure; SameSite=Strict` cookie for anything real.
+The session token is kept in `sessionStorage` so a refresh does not log you out.
+That is a prototype convenience — any script on this origin can read it. The
+access cookie above is `httpOnly`, so the page cannot read *that*.
 
 ---
 
@@ -219,8 +304,9 @@ Tested end-to-end against a real `sshd` on Ubuntu 24.04, not mocked:
 
 ## Next, in order
 
-1. **TLS + rate limiting + host key pinning** — before any exposure
+1. **TLS in front of it** — before any exposure
 2. **CodeMirror 6** in place of the plain `textarea`, for syntax highlighting
+   (and a diff before saving a config file)
 3. **App-level users** with their own login, mapped to real Unix accounts
 4. **Per-user containers** — this is what makes GUI apps and true isolation
    possible at the same time. Price out Kasm Workspaces before building it.

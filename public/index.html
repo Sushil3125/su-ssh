@@ -3,12 +3,29 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Remote Desktop over SSH</title>
+<title>su-ssh — Remote Desktop over SSH</title>
 <link rel="stylesheet" href="/vendor/xterm-css/xterm.css">
 <link rel="stylesheet" href="/css/desktop.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23E95420'/></svg>">
 </head>
 <body>
+
+<!-- Shown instead of everything else when the browser lacks this launch's
+     access cookie. Static and inert on purpose: it must render with no API. -->
+<div id="access-screen" class="greeter access-screen is-hidden" role="alertdialog" aria-labelledby="access-title">
+  <div class="greeter__glow" aria-hidden="true"></div>
+  <div class="greeter__card">
+    <header class="greeter__head">
+      <div class="greeter__mark" aria-hidden="true"><span></span><span></span><span></span></div>
+      <h1 id="access-title">Open the access link</h1>
+      <p>This relay only accepts browsers that arrived through the link it printed when it started.</p>
+    </header>
+    <p class="hint">Look in the terminal where you ran <code>npx su-ssh</code> for a line like
+      <code>http://127.0.0.1:3000/#k=…</code> and open that exact URL. Every restart prints a new one,
+      so a link from an earlier run no longer works.</p>
+    <p id="access-detail" class="alert is-hidden" role="alert"></p>
+  </div>
+</div>
 
 <!-- ─────────────────────────────── greeter ─────────────────────────────── -->
 <div id="greeter" class="greeter">
@@ -17,6 +34,10 @@
   <form id="connect-form" class="greeter__card" autocomplete="off">
     <header class="greeter__head">
       <div class="greeter__mark" aria-hidden="true"><span></span><span></span><span></span></div>
+      <!-- Only shown when the greeter is an overlay over a live desktop: on the
+           front door there is nothing behind it to go back to. -->
+      <button type="button" class="greeter__cancel is-hidden" id="greeter-cancel"
+              title="Cancel (Esc)" aria-label="Cancel and return to the desktop">✕</button>
       <h1>Connect to a server</h1>
       <p>Everything you see next is read live over SSH. Nothing is cached on this machine.</p>
     </header>
@@ -48,10 +69,10 @@
     <fieldset class="field">
       <span class="field__legend">Authentication</span>
       <div class="segmented" role="tablist" id="auth-tabs">
-        <button type="button" role="tab" class="segmented__btn is-active" data-auth="password">Password</button>
-        <button type="button" role="tab" class="segmented__btn" data-auth="key">Private key</button>
-        <button type="button" role="tab" class="segmented__btn" data-auth="keyfile">Key file</button>
-        <button type="button" role="tab" class="segmented__btn" data-auth="agent">Agent</button>
+        <button type="button" role="tab" class="segmented__btn is-active" data-auth="password" aria-selected="true">Password</button>
+        <button type="button" role="tab" class="segmented__btn" data-auth="key" aria-selected="false" tabindex="-1">Private key</button>
+        <button type="button" role="tab" class="segmented__btn" data-auth="keyfile" aria-selected="false" tabindex="-1">Key file</button>
+        <button type="button" role="tab" class="segmented__btn" data-auth="agent" aria-selected="false" tabindex="-1">Agent</button>
       </div>
     </fieldset>
 
@@ -118,8 +139,13 @@
 
   <div class="topbar">
     <div class="topbar__left">
-      <span class="dot dot--live" id="link-dot"></span>
-      <span id="topbar-conn">—</span>
+      <!-- Identity chip: colour, label and (when set) environment tag. Never
+           truncated below the host name, and present at 360px. -->
+      <span class="topbar__chip" id="topbar-chip">
+        <span class="dot dot--live" id="link-dot" role="img" aria-label="Connected"></span>
+        <span id="topbar-conn">—</span>
+        <em class="topbar__env is-hidden" id="topbar-env"></em>
+      </span>
       <div class="sysmon is-hidden" id="sysmon" aria-label="System monitor"></div>
     </div>
     <div class="topbar__centre" id="topbar-clock">—</div>
@@ -128,6 +154,16 @@
       <button class="topbar__btn" id="btn-disconnect" title="Disconnect">Disconnect</button>
     </div>
   </div>
+
+  <!-- 2px of host colour across the whole width: identity in peripheral vision
+       and in any screenshot, per UX research §4. -->
+  <div class="hostline" id="hostline" aria-hidden="true"></div>
+
+  <nav class="rail is-hidden" id="rail" aria-label="Connected servers">
+    <div class="rail__list" id="rail-list" role="tablist" aria-label="Servers"></div>
+    <button class="rail__btn rail__add" id="rail-add" title="Add a connection  (Alt+Shift+N)" aria-label="Add a connection">+</button>
+    <button class="rail__btn rail__menu" id="rail-menu" title="All connections" aria-label="All connections">⋯</button>
+  </nav>
 
   <nav class="dock" id="dock" aria-label="Applications">
     <button class="dock__item" data-launch="files" title="Files">
@@ -165,7 +201,9 @@
 <!-- Overlays live outside #shell on purpose: the greeter also raises toasts and
      dialogs, and #shell is display:none until a session exists. -->
 <div class="ctxmenu is-hidden" id="ctxmenu"></div>
-<div class="toasts" id="toasts"></div>
+<!-- A polite live region: every toast is announced, not just shown in a corner.
+     Failures carry role="alert" (see ui.js) so they interrupt instead of queue. -->
+<div class="toasts" id="toasts" role="status" aria-live="polite" aria-relevant="additions"></div>
 <div id="modals"></div>
 
 <script src="/vendor/xterm/xterm.js"></script>

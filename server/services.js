@@ -21,7 +21,7 @@ import { HttpError } from './ssh-session.js';
 /* ------------------------------------------------------------------ safety */
 
 /** Single-quote for /bin/sh. The only safe way to pass an arbitrary argument. */
-const q = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+export const q = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 
 /**
  * systemd unit names allow letters, digits, and `:-_.\@`. Anything else is not
@@ -80,7 +80,7 @@ export async function probePrivilege(session) {
  * password never reaches the command line and never reaches the process list.
  * User-scope units are the user's own, so they are never elevated.
  */
-async function privileged(session, scope, password) {
+export async function privileged(session, scope, password) {
   if (scope === 'user') return { prefix: '', stdin: null };
 
   const { mode } = await probePrivilege(session);
@@ -98,7 +98,7 @@ async function privileged(session, scope, password) {
 }
 
 /** sudo's own failures are unmistakable, and deserve a better message than raw stderr. */
-function translateSudo(result) {
+export function translateSudo(result) {
   const text = `${result.stdout}\n${result.stderr}`;
   if (/incorrect password attempt|Sorry, try again/i.test(text)) {
     const err = new HttpError(401, 'That sudo password was not accepted.');

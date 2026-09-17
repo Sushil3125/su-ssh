@@ -12,8 +12,12 @@
  */
 
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import express from 'express';
 import { getSession, HttpError } from './ssh-session.js';
+// Reused, not reimplemented: one sudo prefix builder and one sudo-error
+// translator for the whole relay, so a fix to either reaches both editors.
+import { privileged, translateSudo, q } from './services.js';
 
 export const fsRouter = express.Router();
 
@@ -190,22 +194,103 @@ fsRouter.get('/read', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-/** POST /api/fs/write { path, content } */
+/**
+ * Write a file the SSH user cannot write, by staging it over SFTP into their
+ * own home and moving it into place with `install` under sudo.
+ *
+ * This is the same mechanism the unit-file editor uses (server/services.js
+ * writeUnitFile) and it is reused rather than reinvented: sudo's stdin carries
+ * the password and nothing else, so the file's first line can never be eaten by
+ * a password reader, and the content never appears on a command line.
+ *
+ * The important difference is the whitelist — or rather its absence. The unit
+ * editor pins the destination to systemd's directories, because there a path
+ * parameter would turn a service editor into "write any file as root". Here
+ * that IS the feature: this is a general-purpose text editor, and refusing
+ * /etc/nginx/nginx.conf while allowing /etc/systemd/system/x.service would be
+ * an arbitrary line that only pushes people back to a terminal.
+ *
+ * What keeps that honest is that it is not a privilege escalation. Reaching
+ * this code already requires the per-launch access cookie, an allowed Host and
+ * Origin, and a live session token — that is, someone who could equally type
+ * `sudo tee` into the Terminal app two clicks away. The relay grants no
+ * authority the SSH login does not already have: sudo still authenticates as
+ * that account, still obeys the target's sudoers, and still needs the password
+ * when the target asks for one. The paths are bounded by the same realpath +
+ * ROOT_JAIL check as every other call in this file, so an operator who wants a
+ * narrower blast radius sets ROOT_JAIL and it applies here too. The one thing
+ * deliberately withheld is silence: an elevated write is never automatic — the
+ * browser only reaches this branch after the user confirmed it (see the
+ * "Write as root" confirm in public/js/apps.js).
+ */
+async function writeAsRoot(session, target, content, password) {
+  const home = session.meta.home;
+  const temp = `${home}/.su-ssh-edit-${randomBytes(6).toString('hex')}.tmp`;
+  const sftp = await session.getSftp();
+
+  await new Promise((resolve, reject) => {
+    const stream = sftp.createWriteStream(temp, { mode: 0o600 });
+    stream.on('error', reject);
+    stream.on('close', resolve);
+    stream.end(Buffer.from(content, 'utf8'));
+  });
+
+  try {
+    const { prefix, stdin } = await privileged(session, 'system', password);
+    // -C keeps the original mode/owner when the file already exists, so saving
+    // /etc/sudoers.d/x does not silently widen its permissions to the default.
+    const exists = await session.exec(`test -e ${q(target)} && echo YES || echo NO`);
+    const preserve = exists.stdout.includes('YES')
+      ? `--mode=$(stat -c %a ${q(target)}) --owner=$(stat -c %U ${q(target)}) --group=$(stat -c %G ${q(target)}) `
+      : '-m 0644 -o root -g root ';
+    const result = await session.exec(`${prefix}install -D ${preserve}${q(temp)} ${q(target)} 2>&1`, { stdin });
+
+    const sudoError = translateSudo(result);
+    if (sudoError) throw sudoError;
+    if (result.code !== 0) throw new HttpError(403, result.stdout.trim() || `Could not write ${target} as root.`);
+  } finally {
+    await session.exec(`rm -f ${q(temp)}`).catch(() => { /* best effort */ });
+  }
+}
+
+/**
+ * POST /api/fs/write { path, content, sudo?, password? }
+ *
+ * Without `sudo` this is an ordinary SFTP write. A permission failure comes
+ * back flagged `needsSudo` rather than as a dead end, which is what lets the
+ * editor offer the elevated retry instead of the bare toast it used to show.
+ */
 fsRouter.post('/write', async (req, res, next) => {
   try {
     const session = getSession(req.sessionToken);
     const sftp = await session.getSftp();
     const target = await resolvePath(session, req.body.path, { mustExist: false });
+    const content = req.body.content ?? '';
+    if (typeof content !== 'string') throw new HttpError(400, 'File content must be text.');
 
-    await new Promise((resolve, reject) => {
-      const stream = sftp.createWriteStream(target);
-      stream.on('error', reject);
-      stream.on('close', resolve);
-      stream.end(Buffer.from(req.body.content ?? '', 'utf8'));
-    });
+    if (req.body.sudo) {
+      await writeAsRoot(session, target, content, req.body.password);
+      console.log(`[fs] wrote ${target} as root`);
+    } else {
+      try {
+        await new Promise((resolve, reject) => {
+          const stream = sftp.createWriteStream(target);
+          stream.on('error', reject);
+          stream.on('close', resolve);
+          stream.end(Buffer.from(content, 'utf8'));
+        });
+      } catch (err) {
+        // SFTP status 3 is PERMISSION_DENIED; ssh2 also reports it by message.
+        const denied = err?.code === 3 || /permission denied/i.test(err?.message || '');
+        if (!denied) throw toHttpError(err, target);
+        throw new HttpError(403, `Permission denied writing ${target} as ${session.meta.username}.`, { needsSudo: true });
+      }
+    }
 
-    const stat = await sftpCall(sftp, 'stat', target);
-    res.json({ path: target, size: stat.size, savedAt: Date.now() });
+    // A freshly root-owned file may be unreadable to the SSH user, so a failed
+    // stat must not turn a successful save into an error.
+    const stat = await sftpCall(sftp, 'stat', target).catch(() => null);
+    res.json({ path: target, size: stat ? stat.size : Buffer.byteLength(content), savedAt: Date.now(), sudo: !!req.body.sudo });
   } catch (err) { next(err); }
 });
 

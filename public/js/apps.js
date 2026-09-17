@@ -1,9 +1,9 @@
 /** apps.js — Files, Editor, Terminal, Viewer. Each returns its window. */
 
-import { api } from './api.js';
 import { createWindow, escapeHtml } from './wm.js';
-import { toast, contextMenu, confirmDialog, promptDialog, formatBytes, formatDate, GLYPH } from './ui.js';
+import { contextMenu, confirmDialog, promptDialog, promptSecret, formatBytes, formatDate, GLYPH } from './ui.js';
 import { forwardFormHtml, wireForwardForm, forwardRowHtml } from './forwards.js';
+import { requireSession, hostPhrase, dangerOpts, markActivity, markDropped } from './sessions.js';
 
 const basename = (p) => p.split('/').filter(Boolean).pop() || '/';
 const dirname = (p) => {
@@ -16,6 +16,10 @@ const joinPath = (dir, name) => (dir === '/' ? `/${name}` : `${dir}/${name}`);
 /* ═══════════════════════════════════════════════════════ file manager ═══ */
 
 export function openFiles(startPath = '~') {
+  // Captured once, here. Every call below is bound to the session this window
+  // was opened on, whatever the user switches to afterwards.
+  const session = requireSession();
+  const { api, toast } = session;
   const win = createWindow({ title: 'Files', icon: '📁', width: 780, height: 500, appId: 'files' });
 
   win.body.innerHTML = `
@@ -129,7 +133,8 @@ export function openFiles(startPath = '~') {
 
   async function doRename(entry) {
     const next = await promptDialog({
-      title: `Rename ${entry.isDirectory ? 'folder' : 'file'}`,
+      title: `Rename ${entry.isDirectory ? 'folder' : 'file'} on ${session.label}`,
+      message: `${entry.path} on ${hostPhrase(session)}`,
       label: 'New name',
       value: entry.name,
       confirmLabel: 'Rename',
@@ -145,10 +150,13 @@ export function openFiles(startPath = '~') {
 
   async function doDelete(entry) {
     const ok = await confirmDialog({
-      title: entry.isDirectory ? `Delete "${entry.name}" and its contents?` : `Delete "${entry.name}"?`,
-      message: 'This removes it on the server and cannot be undone.',
+      title: entry.isDirectory
+        ? `Delete "${entry.name}" and its contents on ${session.label}?`
+        : `Delete "${entry.name}" on ${session.label}?`,
+      message: `This removes ${entry.path} on ${hostPhrase(session)} and cannot be undone.`,
       confirmLabel: 'Delete',
       danger: true,
+      ...dangerOpts(session, { typed: true }),
     });
     if (!ok) return;
     try {
@@ -232,6 +240,8 @@ export function openFiles(startPath = '~') {
 /* ═════════════════════════════════════════════════════════════ editor ═══ */
 
 export function openEditor(filePath = null) {
+  const session = requireSession();
+  const { api, toast } = session;
   const win = createWindow({ title: 'Editor', icon: '📝', width: 720, height: 500, appId: 'editor' });
 
   win.body.innerHTML = `
@@ -276,19 +286,69 @@ export function openEditor(filePath = null) {
     }
   }
 
+  /**
+   * Save, and — when the SSH user cannot write the file — offer the same
+   * elevated path the unit-file editor has always had, rather than the dead end
+   * of a "permission denied" toast on `/etc/nginx/nginx.conf`.
+   *
+   * Elevation is never automatic. The relay answers a denied write with
+   * `needsSudo`, this asks in as many words which host is about to be written
+   * as root, and only then retries with `sudo: true`; if that host wants a sudo
+   * password the relay comes back `needsPassword` and it is asked for once,
+   * used for that one command, and dropped (ui.js promptSecret — the same
+   * mechanism services.js uses).
+   */
   async function save() {
     const target = pathInput.value.trim();
     if (!target) return toast('Enter a file path first.', 'bad');
     state.textContent = 'Saving…';
     try {
       const res = await api.write(target, area.value);
-      info.textContent = `${formatBytes(res.size)} · saved ${new Date(res.savedAt).toLocaleTimeString()}`;
-      setDirty(false);
-      toast(`Saved ${basename(target)}`, 'good');
+      afterSave(res, target);
     } catch (err) {
-      state.textContent = 'Save failed';
-      toast(err.message, 'bad');
+      if (!err.needsSudo) {
+        state.textContent = 'Save failed';
+        return toast(err.message, 'bad');
+      }
+      state.textContent = 'Needs root';
+      const ok = await confirmDialog({
+        title: `Write ${basename(target)} as root on ${session.label}?`,
+        message: `${session.username} cannot write ${target} on ${hostPhrase(session)}.`
+          + ' It can be written with sudo instead — the file goes up to your home directory first and is'
+          + ' then moved into place with `install`, keeping its current owner and mode.',
+        confirmLabel: 'Write as root',
+        danger: true,
+        ...dangerOpts(session, { typed: true }),
+      });
+      if (!ok) { state.textContent = 'Not saved'; return; }
+      await saveAsRoot(target);
     }
+  }
+
+  async function saveAsRoot(target, password) {
+    state.textContent = 'Saving as root…';
+    try {
+      const res = await api.write(target, area.value, { sudo: true, password });
+      afterSave(res, target, { sudo: true });
+    } catch (err) {
+      if (err.needsPassword) {
+        const secret = await promptSecret({
+          title: 'sudo password needed',
+          message: `Writing ${target} needs root on ${hostPhrase(session)}.`
+            + ' It is used for this one command and never stored.',
+          accent: session.color,
+        });
+        if (secret) return saveAsRoot(target, secret);
+      }
+      state.textContent = 'Save failed';
+      toast(err.message, 'bad', 8000);
+    }
+  }
+
+  function afterSave(res, target, { sudo = false } = {}) {
+    info.textContent = `${formatBytes(res.size)} · saved ${new Date(res.savedAt).toLocaleTimeString()}${sudo ? ' as root' : ''}`;
+    setDirty(false);
+    toast(`Saved ${basename(target)}${sudo ? ' as root' : ''}`, 'good');
   }
 
   area.addEventListener('input', () => setDirty(true));
@@ -324,9 +384,12 @@ export function openEditor(filePath = null) {
 /* ═══════════════════════════════════════════════════════════ terminal ═══ */
 
 export function openTerminal(cwd = null) {
-  const win = createWindow({ title: 'Terminal', icon: '▶', width: 760, height: 440, appId: 'terminal' });
-  win.body.innerHTML = '<div class="termhost"></div>';
+  const session = requireSession();
+  const { api } = session;
+  const win = createWindow({ title: `${session.label} — Terminal`, icon: '▶', width: 760, height: 440, appId: 'terminal' });
+  win.body.innerHTML = '<div class="termhost"></div><div class="term-lost is-hidden" data-role="lost"></div>';
   const host = win.body.querySelector('.termhost');
+  const lost = win.body.querySelector('[data-role="lost"]');
 
   const term = new Terminal({
     fontFamily: '"Ubuntu Mono", ui-monospace, monospace',
@@ -343,6 +406,14 @@ export function openTerminal(cwd = null) {
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open(host);
+
+  // xterm swallows almost every chord while focused, so the session shortcuts
+  // are taken away from it explicitly. Returning false stops xterm processing
+  // the event AND stops it reaching the PTY; the window-level capture handler
+  // in main.js has already acted on it. Everything else — Ctrl+C, Ctrl+D,
+  // Alt+B, Alt+F, Alt+. — is untouched and still goes to the shell.
+  term.attachCustomKeyEventHandler((e) => !(e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey
+    && (/^Digit[1-8]$/.test(e.code) || ['BracketLeft', 'BracketRight', 'KeyN'].includes(e.code))));
 
   // The first fit must wait a frame, or xterm measures a zero-height container
   // and every subsequent resize is computed from a wrong baseline.
@@ -365,8 +436,39 @@ export function openTerminal(cwd = null) {
     term.write(new Uint8Array(e.data));
   });
 
-  socket.addEventListener('close', () => term.writeln('\r\n\x1b[90m[disconnected]\x1b[0m'));
-  socket.addEventListener('error', () => term.writeln('\r\n\x1b[31m[connection error]\x1b[0m'));
+  // Output arriving while you are looking elsewhere is what the rail's activity
+  // badge is for; the scrollback keeps it either way.
+  socket.addEventListener('message', () => markActivity(session));
+
+  /**
+   * A dead PTY used to be a grey word inside a black rectangle with nothing to
+   * click. Now the stream that died says so above the terminal and offers the
+   * one thing you want — another shell on the same host — while the scrollback
+   * underneath stays readable and selectable.
+   */
+  function showLost(reason) {
+    if (!lost.classList.contains('is-hidden')) return;
+    lost.innerHTML = `<span class="term-lost__msg"></span>
+      <button class="btn btn--sm" data-act="reconnect">Reconnect</button>`;
+    lost.querySelector('.term-lost__msg').textContent = `${reason} on ${session.label}.`;
+    lost.classList.remove('is-hidden');
+    lost.querySelector('[data-act="reconnect"]').addEventListener('click', () => {
+      win.close();
+      openTerminal(cwd);
+    });
+  }
+
+  socket.addEventListener('close', () => {
+    term.writeln('\r\n\x1b[90m[disconnected]\x1b[0m');
+    showLost('This terminal stream ended');
+    // A PTY closing is also the earliest signal that the SSH session itself
+    // went away, so ask rather than wait for the ten-second poll.
+    session.api.session().catch((err) => { if (err.status === 401) markDropped(session, 'connection lost'); });
+  });
+  socket.addEventListener('error', () => {
+    term.writeln('\r\n\x1b[31m[connection error]\x1b[0m');
+    showLost('This terminal lost its connection');
+  });
 
   term.onData((data) => {
     if (socket.readyState === WebSocket.OPEN) socket.send(new TextEncoder().encode(data));
@@ -384,11 +486,13 @@ export function openTerminal(cwd = null) {
   const onWindowResize = () => win.onResize();
   window.addEventListener('resize', onWindowResize);
 
-  win.onClose = () => {
+  const teardown = () => {
     window.removeEventListener('resize', onWindowResize);
-    socket.close();
+    try { socket.close(); } catch { /* already closed */ }
     term.dispose();
   };
+  win.onClose = teardown;
+  win.onForceClose = teardown;
 
   return win;
 }
@@ -401,6 +505,7 @@ function shellQuote(s) {
 /* ═════════════════════════════════════════════════════════════ viewer ═══ */
 
 export function openViewer(filePath) {
+  const { api } = requireSession();
   const win = createWindow({ title: basename(filePath), icon: '🖼', width: 620, height: 480 });
   win.body.innerHTML = `<div class="viewer"><img alt="${escapeHtml(basename(filePath))}" src="${api.previewUrl(filePath)}"></div>
     <div class="statusbar"><span>${escapeHtml(filePath)}</span><span data-role="dims">—</span></div>`;
@@ -426,6 +531,8 @@ export function openViewer(filePath) {
  * byte count is not worth a second WebSocket.
  */
 export function openForwards() {
+  const session = requireSession();
+  const { api, toast } = session;
   const win = createWindow({ title: 'Port forwarding', icon: '🔀', width: 720, height: 560, appId: 'ports' });
 
   win.body.innerHTML = `
@@ -455,7 +562,17 @@ export function openForwards() {
   list.addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-act="remove"]');
     if (!btn) return;
-    const id = btn.closest('.fwd-row').dataset.id;
+    const row = btn.closest('.fwd-row');
+    const id = row.dataset.id;
+    const ok = await confirmDialog({
+      title: `Close this forward on ${session.label}?`,
+      message: `${row.querySelector('.fwd-row__title')?.textContent.trim() || 'The tunnel'} on ${hostPhrase(session)}.`
+        + ' Anything using it loses the connection.',
+      confirmLabel: 'Close forward',
+      danger: true,
+      ...dangerOpts(session),
+    });
+    if (!ok) return;
     try {
       await api.closeForward(id);
       toast('Forward closed.', 'good');
@@ -474,5 +591,6 @@ export function openForwards() {
   refresh();
   timer = setInterval(refresh, 2000);
   win.onClose = () => { clearInterval(timer); };  // The forwards themselves keep running.
+  win.onForceClose = () => clearInterval(timer);
   return win;
 }

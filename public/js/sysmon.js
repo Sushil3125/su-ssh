@@ -11,7 +11,6 @@
  * two legs it is made of in the tooltip.
  */
 
-import { api } from './api.js';
 import { formatBytes } from './ui.js';
 
 const PING_EVERY_MS = 2000;
@@ -41,7 +40,13 @@ const METERS = [
   { key: 'ping', label: 'PING', bar: false },
 ];
 
-export function startSystemMonitor() {
+/**
+ * `api` is the owning session's client, not "the current one": only the active
+ * session streams metrics (the spec pauses background ones), and passing the
+ * client in is what guarantees the meters and the top bar are describing the
+ * same machine.
+ */
+export function startSystemMonitor(api) {
   const host = document.getElementById('sysmon');
   host.innerHTML = METERS.map((m) => `
     <div class="sysmon__item sysmon__item--${m.key}" data-meter="${m.key}" title="Waiting for the first sample…">

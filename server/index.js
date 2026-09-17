@@ -7,13 +7,19 @@
  * a raw TCP socket.
  */
 
+import fs from 'node:fs';
 import http from 'node:http';
+import https from 'node:https';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 
-import { connect, getSession, HttpError } from './ssh-session.js';
+import { connect, getSession, describeSessions, HttpError, startIdleReaper, MAX_SESSIONS } from './ssh-session.js';
+import {
+  buildAllowlist, describeAllowlist, hostGuard, checkRequestOrigin,
+  ConnectLimiter, rateLimitMessage, AccessGate,
+} from './security.js';
 import { fsRouter } from './routes-fs.js';
 import { createForward, listForwards, removeForward } from './port-forward.js';
 import { terminalRoute } from './terminal-ws.js';
@@ -30,9 +36,36 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.BIND || '127.0.0.1';
+const IDLE_MINUTES = process.env.SESSION_IDLE_MINUTES === undefined ? 15 : Number(process.env.SESSION_IDLE_MINUTES);
+const TLS_CERT = process.env.TLS_CERT || '';
+const TLS_KEY = process.env.TLS_KEY || '';
+
+// Misconfiguration is reported as one line and a non-zero exit, not as a stack
+// trace: these are things the person starting the relay typed, not bugs.
+function configError(message) {
+  console.error(`\n  ${message}\n`);
+  process.exit(1);
+}
+
+if (!Number.isFinite(IDLE_MINUTES) || IDLE_MINUTES < 0) {
+  configError(`--idle-timeout / SESSION_IDLE_MINUTES must be a number of minutes (0 disables reaping), got "${process.env.SESSION_IDLE_MINUTES}".`);
+}
+if (Boolean(TLS_CERT) !== Boolean(TLS_KEY)) {
+  configError('TLS needs both a certificate and a key: pass --tls-cert and --tls-key together (or TLS_CERT and TLS_KEY).');
+}
+
+let ALLOWED;
+try {
+  ALLOWED = buildAllowlist({ port: PORT, bind: HOST, extra: process.env.ALLOWED_HOSTS || '' });
+} catch (err) { configError(err.message); }
+const limiter = new ConnectLimiter();
+const gate = new AccessGate({ enabled: process.env.NO_ACCESS_KEY !== '1', port: PORT, tls: Boolean(TLS_CERT) });
 
 const app = express();
 app.disable('x-powered-by');
+// First, before static files: a rebound page must not even be able to load
+// our JavaScript under its own hostname.
+app.use(hostGuard(ALLOWED));
 app.use(express.json({ limit: '8mb' }));
 
 /* ------------------------------------------------------------------- static */
@@ -60,11 +93,50 @@ function readToken(req, _res, next) {
   next();
 }
 
+/* ------------------------------------------------------------- access secret */
+
+// Static assets above stay public so the page can load and explain what is
+// missing. Everything under /api needs the access cookie, except the two calls
+// that obtain it and report whether you have it.
+app.get('/api/access', (req, res) => {
+  res.json({ required: gate.enabled, granted: gate.allows(req.headers.cookie) });
+});
+
+app.post('/api/access', (req, res) => {
+  if (!gate.matches(req.body?.key)) {
+    return res.status(401).json({ error: `That access link is not valid for this relay. ${AccessGate.refusal}`, code: 'ACCESS_REQUIRED' });
+  }
+  res.set('Set-Cookie', gate.cookie()).json({ granted: true });
+});
+
+app.use('/api', gate.middleware());
+
 /* ---------------------------------------------------------------- API routes */
 
-app.post('/api/connect', async (req, res, next) => {
+/**
+ * Throttle before doing any work. The outcome is fed back afterwards so that
+ * only real authentication failures escalate the lockout.
+ */
+function throttleConnect(req, res, next) {
+  const wait = limiter.take(req.ip);
+  if (!wait) return next();
+  const retryAfter = Math.ceil(wait / 1000);
+  console.warn(`[ratelimit] ${req.ip} refused for ${retryAfter}s`);
+  res.set('Retry-After', String(retryAfter))
+    .status(429)
+    .json({ error: rateLimitMessage(wait), code: 'RATE_LIMITED', retryAfter });
+}
+
+app.post('/api/connect', throttleConnect, async (req, res, next) => {
   try {
-    const session = await connect(req.body);
+    let session;
+    try {
+      session = await connect(req.body);
+    } catch (err) {
+      if (err.status === 401) limiter.failure(req.ip);
+      throw err;
+    }
+    limiter.success(req.ip);
     console.log(`[connect] ${session.meta.username}@${session.meta.host}:${session.meta.port} via ${session.meta.authMethod}`);
 
     // Forwards requested on the login screen are opened here, one by one. A
@@ -90,6 +162,24 @@ app.post('/api/disconnect', readToken, (req, res) => {
     getSession(req.sessionToken).destroy();
   } catch { /* already gone; disconnecting twice is not an error */ }
   res.json({ disconnected: true });
+});
+
+/**
+ * Batched liveness check for a tab holding several sessions.
+ *
+ * The response is keyed by the tokens the request supplied and contains nothing
+ * else: a token that is not live is simply missing from `sessions`. There is
+ * deliberately no endpoint that enumerates the relay's sessions — knowing that
+ * a session exists is knowing that someone is logged into that host, and the
+ * token itself is the only credential for it.
+ */
+app.post('/api/sessions/validate', (req, res, next) => {
+  try {
+    const tokens = Array.isArray(req.body?.tokens) ? req.body.tokens : [];
+    if (tokens.length > 64) throw new HttpError(400, 'Too many tokens in one validation request.');
+    const clean = tokens.filter((t) => typeof t === 'string' && /^[0-9a-f]{1,128}$/.test(t));
+    res.json({ sessions: describeSessions(clean) });
+  } catch (err) { next(err); }
 });
 
 app.get('/api/session', readToken, (req, res, next) => {
@@ -241,22 +331,62 @@ app.use((err, _req, res, _next) => {
   if (status >= 500) console.error('[error]', err);
   // needsPassword tells the browser to ask for a sudo password and retry,
   // rather than reporting a dead end the user cannot act on.
-  res.status(status).json({ error: err.message || 'Something went wrong.', needsPassword: !!err.needsPassword });
+  res.status(status).json({
+    error: err.message || 'Something went wrong.',
+    needsPassword: !!err.needsPassword,
+    // "You may retry this with sudo" — distinct from "give me a password",
+    // because the browser must ask the user before elevating anything.
+    ...(err.needsSudo ? { needsSudo: true } : {}),
+    ...(err.code && typeof err.code === 'string' && /^[A-Z_]+$/.test(err.code) ? { code: err.code } : {}),
+    ...(err.hostKey ? { hostKey: err.hostKey } : {}),
+  });
 });
 
 /* -------------------------------------------------------------------- listen */
 
-const server = http.createServer(app);
+// Certificates are read once at start-up. A missing file is reported by path
+// rather than as a bare ENOENT from deep inside the TLS stack.
+function readTlsFile(label, file) {
+  try { return fs.readFileSync(file); } catch (err) {
+    return configError(`Cannot read the TLS ${label} at ${file}: ${err.code || err.message}`);
+  }
+}
+
+const server = TLS_CERT
+  ? https.createServer({ cert: readTlsFile('certificate', TLS_CERT), key: readTlsFile('key', TLS_KEY) }, app)
+  : http.createServer(app);
+const scheme = TLS_CERT ? 'https' : 'http';
+
 attachWebSockets(server, {
   '/ws/terminal': terminalRoute,
   '/ws/journal': journalRoute,
   '/ws/metrics': metricsRoute,
+}, {
+  // Origin is always checked on the upgrade: browsers do not apply CORS to
+  // WebSockets, so this is the only cross-site barrier they have.
+  authorize: (request) => checkRequestOrigin(ALLOWED, { host: request.headers.host, origin: request.headers.origin }, { checkOrigin: true })
+    || (gate.allows(request.headers.cookie) ? null : AccessGate.refusal),
 });
 
+startIdleReaper(IDLE_MINUTES * 60_000);
+
 server.listen(PORT, HOST, () => {
-  console.log(`\n  Web desktop relay listening on http://${HOST}:${PORT}`);
+  // A wildcard bind is not something a browser can open; point at loopback.
+  const shown = ['0.0.0.0', '::'].includes(HOST) ? '127.0.0.1' : (HOST.includes(':') ? `[${HOST}]` : HOST);
+  console.log(`\n  Web desktop relay listening on ${scheme}://${HOST}:${PORT}`);
+  if (gate.enabled) {
+    console.log(`\n  Open this link (it carries this launch's access key):\n\n    ${scheme}://${shown}:${PORT}/#k=${gate.secret}\n`);
+  } else {
+    console.warn('  Access key disabled (--no-auth). Anyone who can reach this port can use your ssh-agent and keys;');
+    console.warn('  only do this behind a reverse proxy that authenticates users itself.');
+  }
   console.log(`  Bound to ${HOST}. Set BIND=0.0.0.0 to expose it, but read the security notes first.`);
   if (process.env.ALLOW_PUBLIC_FORWARDS === '1') console.log('  Port forwards may bind non-loopback addresses.');
   if (process.env.ROOT_JAIL) console.log(`  Path jail active: ${process.env.ROOT_JAIL}`);
+  console.log(`  Answering to host names: ${describeAllowlist(ALLOWED)}`);
+  console.log(`  At most ${MAX_SESSIONS} SSH sessions at once (MAX_SESSIONS).`);
+  console.log(IDLE_MINUTES > 0
+    ? `  Sessions with no open window close after ${IDLE_MINUTES} idle minute${IDLE_MINUTES === 1 ? '' : 's'}.`
+    : '  Idle session reaping disabled.');
   console.log('');
 });

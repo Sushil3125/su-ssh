@@ -1,6 +1,121 @@
 # Changelog — WebSSH Ubuntu Desktop
 
 ## Unreleased
+
+### Multi-session switching
+- **Several servers in one tab.** A host rail sits left of the app dock with one
+  chip per connection: colour bar, initials, status dot, open-window count and an
+  activity dot when a background host produced output while you were away. Up to
+  eight per tab; the relay caps its own total with `MAX_SESSIONS` (default 16)
+  and answers a further connect with 429.
+- **A session owns a workspace.** Windows, dock task buttons, desktop icons,
+  top-bar meters and the system info line all belong to the session they were
+  opened on. Switching hides one set of DOM nodes and shows another: no socket is
+  closed, no long-running command dies, no unsaved editor buffer is lost, and
+  position, size, minimise/maximise, z-order and keyboard focus come back exactly
+  as they were. A window is bound to its session's token at open time and can
+  never be pointed at another host.
+- **Background sessions keep running** — terminals, journal streams, port
+  forwards and uploads all continue. Only the active session streams
+  `/ws/metrics`; a backgrounded one stops sampling and resumes on activation.
+- **Add a connection without losing what you have.** The greeter opens as an
+  overlay over the live desktop (`+` on the rail or `Alt+Shift+N`), with Esc and
+  Cancel to back out. A failed connect leaves the overlay open with the error and
+  the form intact, and the session underneath untouched. Connecting to a target
+  you already hold offers "Switch to it" or "Connect again".
+- **Disconnect one or all.** Every confirmation names the label *and* the host,
+  counts the windows and forwards it will close, and is drawn in the session's
+  colour. Disconnecting the active session activates the most recently used one;
+  disconnecting the last shows the full-screen greeter.
+- **Drop detection.** A dropped connection is noticed three ways — a WebSocket
+  closing, a 401 on any request carrying that token, and a ten-second batched
+  liveness poll. The entry greys out, a toast names it, its windows freeze with a
+  Reconnect / Close banner, and the app never auto-switches away from what you
+  are looking at. Reconnecting puts the new session in the same rail slot.
+- **Refresh restores sessions** (not window layout, as before) via a new
+  `POST /api/sessions/validate`, which answers only for the tokens the request
+  supplies and never enumerates the relay's sessions. Dead ones are dropped with
+  one summary toast. A single `ssh-token` left by 0.1.0 is upgraded to a
+  one-entry list.
+- **Keyboard:** `Alt+Shift+1…8` jump to a session, `Alt+Shift+[` / `Alt+Shift+]`
+  cycle, `Alt+Shift+N` adds one. Matched on `event.code`, captured before xterm,
+  and never forwarded to the PTY; `Ctrl+C`, `Ctrl+D`, `Alt+B`, `Alt+F` and
+  `Alt+.` reach the shell exactly as before. Switching is refused while a confirm
+  or sudo prompt is open, so a dialog raised by one host can never be answered
+  while looking at another.
+
+### Knowing which machine you are on
+- Every session gets an accent colour, auto-assigned from an eight-colour
+  accessible palette and stable per `user@host:port`, plus an editable label and
+  an optional `dev` / `staging` / `prod` tag (right-click a rail chip). The
+  colour and the label appear together in the rail chip, the top-bar chip, a 2px
+  line across the desktop, every window title bar and the browser tab title —
+  colour is never the only signal.
+- Marking a host `prod` forces red, adds a PROD tag, and makes destructive
+  confirmations require the host name to be typed before the button enables.
+- Every destructive confirmation now names the session and the host: systemctl
+  stop/restart/disable/mask, unit-file save, `daemon-reload`, file delete and
+  rename, closing a forward, disconnecting, and an elevated editor save.
+- Toasts raised by a background session are prefixed with that session's label.
+
+### Real connection status
+- `#link-dot` in the top bar was hard-coded "live" and never changed. It now
+  shows the active session's actual state — live, reconnecting, or dropped — with
+  the state in its tooltip and accessible name.
+- A terminal whose stream ends shows an inline strip above the scrollback with a
+  Reconnect button, instead of a grey `[disconnected]` inside the black
+  rectangle; the journal view's status word gains the same.
+
+### Editor
+- Saving a file the SSH user cannot write no longer dead-ends on a permission
+  toast. The relay answers a denied write with `needsSudo`, the editor asks —
+  naming the host — and retries through the same SFTP-temp-file plus `install`
+  under `sudo` mechanism the unit-file editor already used, prompting for a sudo
+  password only if that host needs one. An existing file keeps its owner and
+  mode. See the security section of the README for why this one has no path
+  whitelist.
+
+### Accessibility and ergonomics
+- `#toasts` is an `aria-live="polite"` region and failures carry `role="alert"`,
+  so success and failure are announced rather than only shown.
+- The greeter's authentication switcher is a real tab list: `aria-selected`,
+  a roving `tabindex`, and Arrow/Home/End keys.
+- Window minimise/maximise/close buttons are 24×24 (WCAG 2.2 SC 2.5.8), as are
+  the recents and forward-row remove buttons and the rail chip actions.
+- A recent connection that needs no secret (agent auth) connects on one click or
+  Enter, instead of only filling in the form.
+- `.greeter__foot` contrast raised from roughly 2.6:1 to pass AA.
+
+### Security hardening
+- **Per-launch access link.** The relay prints `http://127.0.0.1:3000/#k=<key>`
+  and only serves its API to a browser that has traded that key for an
+  `httpOnly; SameSite=Strict` cookie. The key travels in the URL fragment, so it
+  never reaches a server log or a `Referer` header, and the page strips it from
+  the address bar. Nothing is persisted: a restart issues a new link. Disable
+  with `--no-auth` behind an authenticating proxy.
+- **DNS-rebinding and cross-site protection.** A `Host` allowlist is enforced on
+  every HTTP request and WebSocket upgrade, and an `Origin` check on upgrades and
+  state-changing requests. Extend it with `--allowed-host` / `ALLOWED_HOSTS` for
+  reverse proxies. Without this, any page the user visited could rebind its name
+  to 127.0.0.1 and drive the relay — including signing in with the user's
+  ssh-agent — as same-origin.
+- **Host key verification** with trust on first use and pinning. Unknown hosts are
+  refused with their SHA256 fingerprint, shown in a greeter dialog and pinned to
+  `~/.config/su-ssh/known_hosts.json` (0600) only after explicit confirmation of
+  that exact fingerprint. `~/.ssh/known_hosts` is consulted too (plain and hashed
+  entries; `@revoked` is refused). A changed key is blocked outright, with no
+  override in the browser — clear it with `su-ssh --forget-host host[:port]`.
+- **Rate limiting** on `/api/connect` per client address: 10 attempts a minute
+  plus a doubling lockout after three authentication failures, answered with 429,
+  `Retry-After` and a countdown in the greeter.
+- **Idle sessions are reaped.** A closed tab no longer leaves an SSH connection,
+  its forwards and its sampler loops alive until restart; `--idle-timeout`
+  (default 15 minutes, `0` disables) closes sessions with no open WebSocket and no
+  HTTP traffic. An open desktop holds the metrics socket, so it stays alive.
+- **Optional TLS** with `--tls-cert` / `--tls-key`.
+- The ssh-agent socket can no longer be chosen by the request; only the relay's
+  own `SSH_AUTH_SOCK` is used. Key-file errors are now one generic message, so
+  the field cannot probe the relay host's filesystem.
 - **Port forwarding.** Local (`-L`), remote (`-R`) and dynamic SOCKS5 (`-D`)
   tunnels, created and closed against a live session without reconnecting.
   Queue them on the greeter to have them open with the session, or manage them

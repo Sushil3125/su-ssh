@@ -13,9 +13,9 @@
  *   action and held only for the lifetime of that request.
  */
 
-import { api } from './api.js';
 import { createWindow, escapeHtml } from './wm.js';
-import { toast, promptSecret, confirmDialog, formatBytes } from './ui.js';
+import { promptSecret, confirmDialog, formatBytes } from './ui.js';
+import { requireSession, hostPhrase, dangerOpts, markActivity, markDropped } from './sessions.js';
 
 /** Buttons on the detail header, in the order they are useful. */
 const PRIMARY_ACTIONS = [
@@ -48,6 +48,10 @@ const FILTERS = {
 const MAX_LOG_LINES = 5000;
 
 export function openServices(startUnit = null) {
+  // Captured once: every systemctl call this window ever makes goes to this
+  // host, and every confirm it raises names it.
+  const session = requireSession();
+  const { api, toast } = session;
   const win = createWindow({ title: 'Services', icon: '⚙', width: 960, height: 620, appId: 'services' });
 
   win.body.innerHTML = `
@@ -164,8 +168,9 @@ export function openServices(startUnit = null) {
       if (!err.needsPassword && err.status !== 401) throw err;
       const password = await promptSecret({
         title: 'sudo password needed',
-        message: `${what} needs root on ${state.scope === 'user' ? 'this user manager' : 'the server'}.`
+        message: `${what} needs root on ${state.scope === 'user' ? `this user manager on ${session.label}` : hostPhrase(session)}.`
           + ' It is used for this one command and never stored.',
+        accent: session.color,
       });
       if (!password) throw new Error('Cancelled.');
       return run(password);
@@ -300,10 +305,14 @@ export function openServices(startUnit = null) {
     const unit = state.selected;
     if (ask && CONFIRM[action]) {
       const ok = await confirmDialog({
-        title: `${CONFIRM[action]} ${unit}?`,
-        message: `This runs systemctl ${action} on ${state.scope === 'user' ? 'your user manager' : 'the server'}.`,
+        title: `${CONFIRM[action]} ${unit} on ${session.label}?`,
+        message: `This runs systemctl ${action} on ${hostPhrase(session)}`
+          + `${state.scope === 'user' ? ' (your user manager there)' : ''}.`,
         confirmLabel: CONFIRM[action],
         danger: action !== 'restart',
+        // restart is recoverable; stop/disable/mask are the ones that leave a
+        // production box down until someone notices.
+        ...dangerOpts(session, { typed: action !== 'restart' }),
       });
       if (!ok) return;
     }
@@ -379,9 +388,30 @@ export function openServices(startUnit = null) {
       }
     });
 
+    ws.addEventListener('message', () => markActivity(session));
+
     ws.addEventListener('close', () => {
-      if (socket === ws) { socket = null; $('logstate').textContent = 'disconnected'; }
+      if (socket !== ws) return;
+      socket = null;
+      // Same reasoning as the terminal: a stream that died is told to the user
+      // with the one action that fixes it, not as a 10px grey word.
+      showLogLost('Log stream disconnected');
+      session.api.session().catch((err) => { if (err.status === 401) markDropped(session, 'connection lost'); });
     });
+  }
+
+  /** Replace the log status word with a reason and a Reconnect button. */
+  function showLogLost(reason) {
+    const el = $('logstate');
+    el.innerHTML = '';
+    el.classList.add('svc__logstate--lost');
+    const text = document.createElement('span');
+    text.textContent = reason;
+    const again = document.createElement('button');
+    again.className = 'tbar__btn';
+    again.textContent = 'Reconnect';
+    again.addEventListener('click', () => { el.classList.remove('svc__logstate--lost'); el.textContent = 'connecting…'; startLogs(); });
+    el.append(text, again);
   }
 
   function restartLogsWith(password) {
@@ -490,11 +520,12 @@ export function openServices(startUnit = null) {
     if (!state.file) return;
     const path = state.file.path;
     const ok = await confirmDialog({
-      title: restart ? `Save and restart ${state.selected}?` : `Save ${state.selected}?`,
-      message: `Writes ${path} on the server, then runs daemon-reload`
-        + (restart ? ` and restarts the service.` : '.'),
+      title: restart ? `Save and restart ${state.selected} on ${session.label}?` : `Save ${state.selected} on ${session.label}?`,
+      message: `Writes ${path} on ${hostPhrase(session)}, then runs daemon-reload`
+        + (restart ? ' and restarts the service.' : '.'),
       confirmLabel: restart ? 'Save + restart' : 'Save',
       danger: restart,
+      ...dangerOpts(session, { typed: true }),
     });
     if (!ok) return;
 
@@ -536,6 +567,13 @@ export function openServices(startUnit = null) {
   $('refresh').addEventListener('click', () => { loadList(); if (state.selected) loadDetail(); });
 
   $('daemon-reload').addEventListener('click', async () => {
+    const ok = await confirmDialog({
+      title: `Run daemon-reload on ${session.label}?`,
+      message: `systemd on ${hostPhrase(session)} re-reads every unit file.`,
+      confirmLabel: 'daemon-reload',
+      ...dangerOpts(session, { typed: true }),
+    });
+    if (!ok) return;
     try {
       await withSudo((password) => api.daemonReload({ scope: state.scope, password }), 'daemon-reload');
       toast('systemd re-read its unit files.', 'good');
@@ -589,6 +627,7 @@ export function openServices(startUnit = null) {
     stopLogs();
     return true;
   };
+  win.onForceClose = stopLogs;
 
   loadList();
   return win;

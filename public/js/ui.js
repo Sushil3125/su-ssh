@@ -1,8 +1,18 @@
 /** ui.js — toasts and the right-click menu, shared by every app. */
 
+/**
+ * The container is an `aria-live="polite"` region (see index.html), so every
+ * toast is announced instead of being visible only to people who happen to be
+ * looking at the bottom-right corner. Failures additionally carry `role="alert"`,
+ * which is announced assertively: "Saved" can wait for a pause in speech,
+ * "Permission denied writing /etc/nginx.conf" cannot. The role is set before the
+ * node is inserted, because a live region only announces what changes *after*
+ * it is in the document.
+ */
 export function toast(message, kind = 'info', ms = 3800) {
   const el = document.createElement('div');
   el.className = `toast toast--${kind}`;
+  if (kind === 'bad') el.setAttribute('role', 'alert');
   el.textContent = message;
   document.getElementById('toasts').appendChild(el);
   setTimeout(() => {
@@ -58,7 +68,7 @@ window.addEventListener('blur', hideContextMenu);
  * "delete this file?" guard into a deletion.
  *
  * Resolves to an object of field values, or null if the user backed out.
- * `fields` entries: { name, label, type, value, placeholder, hint }.
+ * `fields` entries: { name, label, type, value, placeholder, hint, readonly }.
  */
 export function openDialog({
   title,
@@ -68,6 +78,9 @@ export function openDialog({
   cancelLabel = 'Cancel',
   danger = false,
   dismissable = true,
+  requireText = null,
+  requireLabel = '',
+  accent = null,
 } = {}) {
   return new Promise((resolve) => {
     const host = document.getElementById('modals');
@@ -93,8 +106,20 @@ export function openDialog({
     wrap.querySelector('[data-act="ok"]').textContent = confirmLabel;
     if (cancelLabel) wrap.querySelector('[data-act="cancel"]').textContent = cancelLabel;
 
+    // The session colour on the dialog's edge: a confirm raised for production
+    // should not look like any other confirm, at a glance and in a screenshot.
+    if (accent) wrap.querySelector('.modal__card').style.setProperty('--session-color', accent);
+    wrap.querySelector('.modal__card').classList.toggle('modal__card--accented', !!accent);
+
+    // A production host asks you to type its name. Not theatre: it is the only
+    // guard that survives muscle memory, because the muscle memory is
+    // "Enter on the red button".
+    const allFields = requireText
+      ? [...fields, { name: '__confirmText', label: requireLabel || `Type ${requireText} to confirm`, placeholder: requireText }]
+      : fields;
+
     const fieldHost = wrap.querySelector('.modal__fields');
-    for (const field of fields) {
+    for (const field of allFields) {
       const label = document.createElement('label');
       label.className = 'field';
       label.innerHTML = `<span></span><input class="modal__input"><em class="modal__hint"></em>`;
@@ -104,6 +129,9 @@ export function openDialog({
       input.value = field.value || '';
       input.placeholder = field.placeholder || '';
       input.autocomplete = 'off';
+    // Read-only fields show values the user should inspect or copy (a host key
+    // fingerprint, a command) without implying they can be edited.
+    input.readOnly = !!field.readonly;
       input.spellcheck = false;
       input.dataset.name = field.name;
       const hint = label.querySelector('.modal__hint');
@@ -111,7 +139,15 @@ export function openDialog({
       hint.classList.toggle('is-hidden', !field.hint);
       fieldHost.appendChild(label);
     }
-    fieldHost.classList.toggle('is-hidden', !fields.length);
+    fieldHost.classList.toggle('is-hidden', !allFields.length);
+
+    const okBtn = wrap.querySelector('[data-act="ok"]');
+    if (requireText) {
+      const input = fieldHost.querySelector('[data-name="__confirmText"]');
+      const check = () => { okBtn.disabled = input.value.trim() !== requireText; };
+      input.addEventListener('input', check);
+      check();
+    }
 
     host.appendChild(wrap);
 
@@ -128,6 +164,7 @@ export function openDialog({
 
     wrap.querySelector('form').addEventListener('submit', (e) => {
       e.preventDefault();
+      if (okBtn.disabled) return;
       const result = {};
       for (const input of fieldHost.querySelectorAll('input')) result[input.dataset.name] = input.value;
       done(result);
@@ -158,8 +195,22 @@ export function openDialog({
 }
 
 /** Yes/no. Resolves true only on an explicit confirm. */
-export async function confirmDialog({ title = 'Are you sure?', message = '', confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false } = {}) {
-  return (await openDialog({ title, message, confirmLabel, cancelLabel, danger })) !== null;
+export async function confirmDialog({
+  title = 'Are you sure?', message = '', confirmLabel = 'Confirm', cancelLabel = 'Cancel',
+  danger = false, requireText = null, requireLabel = '', accent = null,
+} = {}) {
+  return (await openDialog({ title, message, confirmLabel, cancelLabel, danger, requireText, requireLabel, accent })) !== null;
+}
+
+/**
+ * Is a modal open right now?
+ *
+ * Switching sessions is blocked while one is: a confirm or a sudo prompt was
+ * raised *by* a session, and answering it while looking at a different desktop
+ * is precisely the mistake this feature exists to prevent.
+ */
+export function modalOpen() {
+  return document.getElementById('modals').childElementCount > 0;
 }
 
 /** One line of text. Resolves to the string, or null if cancelled. */
@@ -181,9 +232,9 @@ export function alertDialog({ title, message = '', confirmLabel = 'Close' } = {}
  * for as long as the caller holds it, so a tab left open on a shared screen is
  * never a standing root shell.
  */
-export async function promptSecret({ title = 'Password required', message = '', confirmLabel = 'Continue' } = {}) {
+export async function promptSecret({ title = 'Password required', message = '', confirmLabel = 'Continue', accent = null } = {}) {
   const result = await openDialog({
-    title, message, confirmLabel,
+    title, message, confirmLabel, accent,
     fields: [{ name: 'password', label: 'sudo password', type: 'password' }],
   });
   return result?.password || null;
