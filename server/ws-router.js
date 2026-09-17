@@ -10,10 +10,25 @@
 import { WebSocketServer } from 'ws';
 import { getSession } from './ssh-session.js';
 
-export function attachWebSockets(server, routes) {
+/**
+ * `authorize(request)` returns null to allow the handshake, or a reason to
+ * refuse it. It runs before routing and before the token check: a WebSocket is
+ * exempt from CORS, so the Host/Origin check is the only thing standing between
+ * a hostile page and a live shell.
+ */
+export function attachWebSockets(server, routes, { authorize = () => null } = {}) {
   const wss = new WebSocketServer({ noServer: true });
 
   server.on('upgrade', (request, socket, head) => {
+    const refusal = authorize(request);
+    if (refusal) {
+      console.warn(`[guard] WS ${request.url.split('?')[0]} host=${request.headers.host} origin=${request.headers.origin ?? '-'}`);
+      const body = JSON.stringify({ error: refusal, code: 'FORBIDDEN_HOST' });
+      // end(), not write()+destroy(): destroy can drop the buffered response,
+      // and the client then sees a reset instead of the reason.
+      return socket.end(`HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+    }
+
     const url = new URL(request.url, 'http://localhost');
     const handler = routes[url.pathname];
     if (!handler) return socket.destroy();
@@ -30,7 +45,13 @@ export function attachWebSockets(server, routes) {
       return socket.destroy();
     }
 
-    wss.handleUpgrade(request, socket, head, (ws) => handler(ws, session, url));
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      // Counted here, once, rather than in each endpoint: the idle reaper only
+      // needs to know that *some* socket is still attached to the session.
+      session.openSockets += 1;
+      ws.on('close', () => { session.openSockets -= 1; session.touch(); });
+      handler(ws, session, url);
+    });
   });
 
   return wss;
