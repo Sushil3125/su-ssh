@@ -1,7 +1,8 @@
 /** apps.js — Files, Editor, Terminal, Viewer. Each returns its window. */
 
 import { createWindow, escapeHtml } from './wm.js';
-import { contextMenu, confirmDialog, promptDialog, promptSecret, formatBytes, formatDate, GLYPH } from './ui.js';
+import { contextMenu, confirmDialog, promptDialog, promptSecret, formatBytes, formatDate, fileIcon } from './ui.js';
+import { icon, iconButton } from './icon.js';
 import { forwardFormHtml, wireForwardForm, forwardRowHtml } from './forwards.js';
 import { requireSession, hostPhrase, dangerOpts, markActivity, markDropped } from './sessions.js';
 
@@ -13,6 +14,14 @@ const dirname = (p) => {
 };
 const joinPath = (dir, name) => (dir === '/' ? `/${name}` : `${dir}/${name}`);
 
+/**
+ * A toolbar button. `title` alone is a tooltip — mouse-only, delayed and not
+ * reliably announced — so every one of these carries an identical aria-label.
+ */
+const tbarBtn = (name, label, nav) =>
+  `<button type="button" class="tbar__btn" data-nav="${nav}" title="${label}" aria-label="${label}">`
+  + `${icon(name, { size: 16 })}</button>`;
+
 /* ═══════════════════════════════════════════════════════ file manager ═══ */
 
 export function openFiles(startPath = '~') {
@@ -20,18 +29,18 @@ export function openFiles(startPath = '~') {
   // was opened on, whatever the user switches to afterwards.
   const session = requireSession();
   const { api, toast } = session;
-  const win = createWindow({ title: 'Files', icon: '📁', width: 780, height: 500, appId: 'files' });
+  const win = createWindow({ title: 'Files', iconName: 'folder', width: 780, height: 500, appId: 'files' });
 
   win.body.innerHTML = `
     <div class="tbar">
-      <button class="tbar__btn" data-nav="back"    title="Back">←</button>
-      <button class="tbar__btn" data-nav="forward" title="Forward">→</button>
-      <button class="tbar__btn" data-nav="up"      title="Parent folder">↑</button>
-      <button class="tbar__btn" data-nav="home"    title="Home">⌂</button>
+      ${tbarBtn('arrow-left',  'Back',          'back')}
+      ${tbarBtn('arrow-right', 'Forward',       'forward')}
+      ${tbarBtn('arrow-up',    'Parent folder', 'up')}
+      ${tbarBtn('house',       'Home',          'home')}
       <input class="tbar__path" spellcheck="false" aria-label="Current path">
-      <button class="tbar__btn" data-nav="refresh" title="Refresh">⟳</button>
-      <button class="tbar__btn" data-nav="mkdir"   title="New folder">＋</button>
-      <button class="tbar__btn" data-nav="upload"  title="Upload files">⬆</button>
+      ${tbarBtn('refresh-cw', 'Refresh',      'refresh')}
+      ${tbarBtn('plus',       'New folder',   'mkdir')}
+      ${tbarBtn('upload',     'Upload files', 'upload')}
     </div>
     <div class="filepane"><div class="filegrid"></div></div>
     <div class="statusbar"><span data-role="count">—</span><span data-role="detail"></span></div>
@@ -77,7 +86,7 @@ export function openFiles(startPath = '~') {
     grid.innerHTML = '';
 
     if (!data.entries.length) {
-      grid.innerHTML = '<div class="empty"><strong>Nothing here yet</strong>Use ＋ to add a folder, or ⬆ to upload a file.</div>';
+      grid.innerHTML = '<div class="empty"><strong>Nothing here yet</strong>Use New folder to add a folder, or Upload files to add a file.</div>';
       count.textContent = '0 items';
       return;
     }
@@ -89,7 +98,7 @@ export function openFiles(startPath = '~') {
       el.tabIndex = 0;
       el.title = `${entry.name}\n${entry.permissions}  ${formatBytes(entry.size)}  ${formatDate(entry.mtime)}`;
       el.innerHTML = `
-        <div class="fitem__glyph">${entry.broken ? '❓' : GLYPH[entry.kind] || GLYPH.binary}</div>
+        <div class="fitem__glyph" aria-hidden="true">${fileIcon(entry, 30)}</div>
         <div class="fitem__name">${escapeHtml(entry.name)}</div>
         <div class="fitem__meta">${entry.isDirectory ? '' : formatBytes(entry.size)}</div>`;
 
@@ -184,7 +193,8 @@ export function openFiles(startPath = '~') {
   }
 
   win.body.querySelector('.tbar').addEventListener('click', async (e) => {
-    const action = e.target.dataset.nav;
+    // closest(): the click lands on the <svg> inside an icon button.
+    const action = e.target.closest('[data-nav]')?.dataset.nav;
     if (!action) return;
     if (action === 'back' && cursor > 0) return go(history[--cursor], { push: false });
     if (action === 'forward' && cursor < history.length - 1) return go(history[++cursor], { push: false });
@@ -242,13 +252,13 @@ export function openFiles(startPath = '~') {
 export function openEditor(filePath = null) {
   const session = requireSession();
   const { api, toast } = session;
-  const win = createWindow({ title: 'Editor', icon: '📝', width: 720, height: 500, appId: 'editor' });
+  const win = createWindow({ title: 'Editor', iconName: 'file-pen', width: 720, height: 500, appId: 'editor' });
 
   win.body.innerHTML = `
     <div class="tbar">
       <input class="tbar__path" spellcheck="false" placeholder="~/notes.txt" aria-label="File path">
-      <button class="tbar__btn" data-act="open">Open</button>
-      <button class="tbar__btn" data-act="save">Save</button>
+      <button type="button" class="tbar__btn" data-act="open">${icon('folder-open', { size: 15 })}<span>Open</span></button>
+      <button type="button" class="tbar__btn" data-act="save">${icon('save', { size: 15 })}<span>Save</span></button>
     </div>
     <textarea class="editor" spellcheck="false" placeholder="Type a path above and choose Open, or start writing and Save to create the file."></textarea>
     <div class="statusbar"><span data-role="state">Ready</span><span data-role="info"></span></div>`;
@@ -386,7 +396,10 @@ export function openEditor(filePath = null) {
 export function openTerminal(cwd = null) {
   const session = requireSession();
   const { api } = session;
-  const win = createWindow({ title: `${session.label} — Terminal`, icon: '▶', width: 760, height: 440, appId: 'terminal' });
+  // Just "Terminal": the title bar already carries the host in .win__host, and
+  // the taskbar rule appends "— <session>" itself. Repeating the label here
+  // produced "prod-db — Terminal 2 — prod-db" in the taskbar.
+  const win = createWindow({ title: 'Terminal', iconName: 'terminal', width: 760, height: 440, appId: 'terminal' });
   win.body.innerHTML = '<div class="termhost"></div><div class="term-lost is-hidden" data-role="lost"></div>';
   const host = win.body.querySelector('.termhost');
   const lost = win.body.querySelector('[data-role="lost"]');
@@ -506,7 +519,7 @@ function shellQuote(s) {
 
 export function openViewer(filePath) {
   const { api } = requireSession();
-  const win = createWindow({ title: basename(filePath), icon: '🖼', width: 620, height: 480 });
+  const win = createWindow({ title: basename(filePath), iconName: 'image', width: 620, height: 480, appId: 'viewer' });
   win.body.innerHTML = `<div class="viewer"><img alt="${escapeHtml(basename(filePath))}" src="${api.previewUrl(filePath)}"></div>
     <div class="statusbar"><span>${escapeHtml(filePath)}</span><span data-role="dims">—</span></div>`;
 
@@ -533,7 +546,7 @@ export function openViewer(filePath) {
 export function openForwards() {
   const session = requireSession();
   const { api, toast } = session;
-  const win = createWindow({ title: 'Port forwarding', icon: '🔀', width: 720, height: 560, appId: 'ports' });
+  const win = createWindow({ title: 'Port forwarding', iconName: 'arrow-right-left', width: 720, height: 560, appId: 'ports' });
 
   win.body.innerHTML = `
     <div class="fwd-app">

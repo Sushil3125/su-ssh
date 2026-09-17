@@ -29,7 +29,57 @@
   --radius: 12px;
   --shadow-win: 0 18px 50px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.4);
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Lucide chevron-right, for the one ::before that cannot use the sprite. */
+  --chevron-right: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E");
 }
+
+/* =============================================================================
+   Icons — Lucide, from the vendored sprite at /icons/icons.svg (see icon.js).
+   Lucide is STROKE art on a 24 grid: `fill` must be none, or every icon renders
+   as a solid blob. Colour is inherited via currentColor, so setting `color` on
+   any ancestor themes the icon — that is how the session colour reaches the
+   taskbar for free.
+   ========================================================================== */
+.icon {
+  display: inline-block;
+  vertical-align: -0.125em;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.icon--thin { stroke-width: 1.5; }   /* 32px+ only: 2px reads heavy when scaled up */
+
+/* Generic icon-only control (iconButton()). Component rules below override the
+   box where a surface needs a different size, never the stroke rules above. */
+.iconbtn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.iconbtn:hover { background: rgba(255, 255, 255, 0.14); color: var(--ink); }
+
+/* Status shapes. Colour is never the only signal — circle-check / circle-x /
+   circle-minus / ban are four different shapes — but the colour still helps. */
+.icon--ok   { color: var(--green); }
+.icon--bad  { color: #ff5c69; }
+.icon--warn { color: #F5C211; }
+.icon--idle { color: var(--ink-muted); }
+
+/* Reconnecting: the only animated icon in the app. */
+.icon--spin { animation: icon-spin 1.1s linear infinite; }
+@keyframes icon-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .icon--spin { animation: none; } }
 
 * { box-sizing: border-box; }
 
@@ -231,6 +281,11 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 }
 
 .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
   padding: 9px 16px;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
@@ -267,6 +322,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .greeter--overlay { background: rgba(10, 7, 9, 0.72); backdrop-filter: blur(3px); z-index: 2500; }
 .greeter--overlay .greeter__glow { opacity: .35; }
 .greeter__cancel {
+  cursor: pointer;
   position: absolute;
   top: 0;
   right: 0;
@@ -292,6 +348,9 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   background: var(--chip-color, var(--line-strong));
 }
 .recent__go {
+  display: grid;
+  place-items: center;
+  cursor: pointer;
   width: 26px;
   height: 26px;
   border: 0;
@@ -363,6 +422,10 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   .topbar__chip { max-width: none; }
 }
 .topbar__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
   padding: 3px 10px;
   border: 1px solid var(--line);
   border-radius: 5px;
@@ -375,10 +438,12 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 /* Three real states, driven by the session (main.js paintIdentity). The old
    .dot--live was hard-coded in the HTML and never changed, so a dead desktop
    looked exactly like a live one. */
-.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-muted); flex: none; }
-.dot--live { background: var(--green); box-shadow: 0 0 0 0 rgba(38, 162, 105, 0.6); animation: pulse 2.6s infinite; }
-.dot--reconnecting { background: #F5C211; animation: pulse-warn 1.1s infinite; }
-.dot--dropped { background: transparent; border: 2px solid var(--red); width: 9px; height: 9px; }
+/* Now a distinct SHAPE per state (circle-dot / loader / unplug), not a coloured
+   disc — red/green colour-blindness no longer erases the meaning. */
+.dot { display: grid; place-items: center; width: 13px; height: 13px; flex: none; color: var(--ink-muted); }
+.dot--live { color: var(--green); }
+.dot--reconnecting { color: #F5C211; }
+.dot--dropped { color: #ff5c69; }
 @keyframes pulse {
   70%  { box-shadow: 0 0 0 7px rgba(38, 162, 105, 0); }
   100% { box-shadow: 0 0 0 0 rgba(38, 162, 105, 0); }
@@ -530,6 +595,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 }
 .chip--dropped .chip__act { color: var(--orange-lift); }
 .chip__act:hover { background: var(--red); color: #fff; }
+.chip__act { cursor: pointer; }
 /* It covers the window count, never the environment tag: "PROD" is the last
    thing that should disappear from a chip. */
 .chip:hover .chip__count, .chip:focus-within .chip__count, .chip--dropped .chip__count { visibility: hidden; }
@@ -616,7 +682,12 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   transition: transform 0.16s var(--ease), background 0.16s;
 }
 .dock__item:hover { transform: scale(1.09); background: linear-gradient(160deg, #7A4468, #4A2A41); }
-.dock__item svg { width: 25px; height: 25px; fill: var(--orange); }
+/* The trap: these were solid hand-drawn paths tinted with `fill`. Lucide is
+   stroke art, so `fill` must stay none (set on .icon) and the colour has to be
+   inherited instead — hence `color` on the item, not `fill` on the svg. */
+.dock__item { color: var(--orange); }
+.dock__item .icon { width: 25px; height: 25px; }
+.dock__item:hover { color: var(--orange-lift); }
 .dock__item.is-running::before {
   content: "";
   position: absolute;
@@ -648,15 +719,46 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 /* One strip per session; every strip but the active one is display:none. */
 .dock__tasks { display: flex; flex-direction: column; gap: 6px; }
 .desktop__iconset { display: contents; }
+/* Icon above a truncated label: 72px of dock is enough for both, and two bare
+   identical glyphs for two Terminals is exactly what this replaces. */
 .dock__task {
-  width: 40px;
-  height: 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: 52px;
+  height: 44px;
   margin: 0 auto;
+  padding: 3px 2px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.06);
   color: var(--ink-muted);
   font-size: 15px;
+  cursor: pointer;
+}
+.dock__task { position: relative; }
+.dock__task-ord {
+  position: absolute;
+  top: 1px;
+  right: 2px;
+  min-width: 13px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--orange);
+  color: #fff;
+  font-size: 9px;
+  line-height: 13px;
+  text-align: center;
+}
+.dock__task-label {
+  max-width: 100%;
+  font-size: 9px;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .dock__task:hover { background: rgba(255, 255, 255, 0.14); color: var(--ink); }
 
@@ -682,7 +784,9 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 }
 .dicon:hover { background: rgba(255, 255, 255, 0.1); }
 .dicon.is-selected { border-color: rgba(233, 84, 32, 0.6); background: rgba(233, 84, 32, 0.2); }
-.dicon__glyph { font-size: 33px; line-height: 1; }
+.dicon__glyph { display: flex; height: 33px; align-items: center; color: var(--ink); }
+.dicon__glyph .icon--bad  { color: #ff5c69; }
+.dicon__glyph .icon--warn { color: #F5C211; }
 .dicon__name {
   max-width: 84px;
   font-size: 11.5px;
@@ -776,6 +880,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   font-size: 12px;
   line-height: 1;
 }
+.win__btn { cursor: pointer; }
 .win__btn:hover { background: rgba(255, 255, 255, 0.24); }
 .win__btn--close:hover { background: var(--red); }
 
@@ -783,14 +888,17 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 
 .win__grip {
   position: absolute;
-  right: 0;
-  bottom: 0;
+  right: 1px;
+  bottom: 1px;
+  display: grid;
+  place-items: center;
   width: 17px;
   height: 17px;
   cursor: nwse-resize;
-  background: linear-gradient(135deg, transparent 52%, var(--line-strong) 52%, var(--line-strong) 62%,
-              transparent 62%, transparent 74%, var(--line-strong) 74%, var(--line-strong) 84%, transparent 84%);
+  color: var(--line-strong);
 }
+/* The svg must never swallow the pointerdown that starts the resize. */
+.win__grip .icon { pointer-events: none; }
 
 /* ---- toolbar shared by file manager and editor ------------------------ */
 
@@ -814,6 +922,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   color: var(--ink);
   font-size: 13px;
 }
+.tbar__btn { gap: 5px; grid-auto-flow: column; cursor: pointer; }
 .tbar__btn:hover:not([disabled]) { background: rgba(255, 255, 255, 0.14); }
 .tbar__btn[disabled] { opacity: 0.35; cursor: not-allowed; }
 .tbar__path {
@@ -848,7 +957,9 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 }
 .fitem:hover { background: rgba(255, 255, 255, 0.07); }
 .fitem.is-selected { border-color: rgba(233, 84, 32, 0.55); background: rgba(233, 84, 32, 0.18); }
-.fitem__glyph { font-size: 30px; line-height: 1; }
+.fitem__glyph { display: flex; height: 30px; align-items: center; color: var(--ink); }
+.fitem__glyph .icon--bad  { color: #ff5c69; }
+.fitem__glyph .icon--warn { color: #F5C211; }
 .fitem__name {
   max-width: 88px;
   font-size: 11.5px;
@@ -919,7 +1030,10 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);
 }
 .ctxmenu__item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
   width: 100%;
   padding: 7px 11px;
   border: 0;
@@ -931,6 +1045,10 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 }
 .ctxmenu__item:hover { background: var(--orange); }
 .ctxmenu__item--danger:hover { background: var(--red); }
+/* A fixed icon column so labels line up whether or not an item has an icon. */
+.ctxmenu__icon { display: grid; place-items: center; width: 15px; flex: none; color: var(--ink-muted); }
+.ctxmenu__item:hover .ctxmenu__icon { color: inherit; }
+.ctxmenu__label { flex: 1; min-width: 0; }
 .ctxmenu__sep { height: 1px; margin: 4px 7px; background: var(--line); }
 
 .toasts {
@@ -1021,9 +1139,17 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   align-items: center;
   gap: 6px;
 }
+/* The one place an icon is drawn from CSS rather than the sprite: ::before
+   cannot host a <use>. A data: URI is safe in mask-image (only <use> lost
+   data:-URI support), and the shape is the same Lucide chevron-right. */
 .greeter__fold > summary::before {
-  content: "▸";
-  color: var(--ink-muted);
+  content: "";
+  width: 14px;
+  height: 14px;
+  flex: none;
+  background-color: var(--ink-muted);
+  -webkit-mask: var(--chevron-right) center / contain no-repeat;
+  mask: var(--chevron-right) center / contain no-repeat;
   transition: transform .15s var(--ease);
 }
 .greeter__fold[open] > summary::before { transform: rotate(90deg); }
@@ -1080,12 +1206,13 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .fwd-row--stopped { opacity: .6; }
 
 .fwd-row__badge {
-  font-family: var(--font-mono);
-  font-size: 12px;
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
   color: var(--orange);
   background: rgba(233, 84, 32, 0.12);
   border-radius: 6px;
-  padding: 3px 6px;
   flex: none;
 }
 .fwd-row__main { flex: 1; min-width: 0; }
@@ -1099,7 +1226,9 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   text-overflow: ellipsis;
 }
 .fwd-row__title code { font-family: var(--font-mono); font-size: 12px; color: var(--ink-muted); }
-.fwd-row__meta { font-size: 11.5px; color: var(--ink-muted); margin-top: 2px; }
+.fwd-row__meta { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-muted); margin-top: 2px; }
+.fwd-row__bytes { display: inline-flex; align-items: center; gap: 3px; }
+.fwd-row__bytes .icon { opacity: .8; }
 .fwd-row__status {
   font-size: 11px;
   text-transform: uppercase;
@@ -1108,6 +1237,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   flex: none;
 }
 .fwd-row__x {
+  display: grid;
+  place-items: center;
   flex: none;
   background: none;
   border: 0;
@@ -1171,7 +1302,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   box-shadow: var(--shadow-win);
   padding: 18px;
 }
-.modal__title { margin: 0 0 6px; font-size: 15px; font-weight: 500; }
+.modal__title { display: flex; align-items: center; gap: 7px; margin: 0 0 6px; font-size: 15px; font-weight: 500; }
 .modal__msg { margin: 0 0 12px; font-size: 12.5px; color: var(--ink-muted); line-height: 1.45;; white-space: pre-line; }
 /* Wider card for dialogs that carry fingerprints, which do not wrap nicely. */
 .modal__card:has(.modal__input[readonly]) { width: min(560px, calc(100vw - 32px)); }
@@ -1238,11 +1369,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .svc__item.is-selected { background: var(--orange); color: #fff; }
 .svc__item.is-selected .svc__itemdesc, .svc__item.is-selected .svc__itemstate { color: rgba(255, 255, 255, 0.85); }
 
-.svc__dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--ink-muted); }
-.svc__dot--ok { background: var(--green); }
-.svc__dot--bad { background: #ff5c69; }
-.svc__dot--warn { background: #F5C211; }
-.svc__dot--idle { background: #6C6165; }
+.svc__dot { display: grid; place-items: center; width: 16px; height: 16px; flex: none; }
 
 .svc__itemtext { flex: 1; min-width: 0; }
 .svc__itemname { display: block; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1448,6 +1575,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .recent__meta { font-size: 11px; color: var(--ink-muted); }
 
 .recent__pin, .recent__x {
+  display: grid;
+  place-items: center;
   flex: none;
   background: none;
   border: 0;

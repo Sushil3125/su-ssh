@@ -11,7 +11,8 @@ import {
   createWorkspace, destroyWorkspace, showWorkspace, useWorkspace, closeAll,
   setWorkspaceFrozen, setWindowCountListener, escapeHtml,
 } from './wm.js';
-import { toast, contextMenu, confirmDialog, openDialog, modalOpen, GLYPH } from './ui.js';
+import { toast, contextMenu, confirmDialog, openDialog, modalOpen, fileIcon } from './ui.js';
+import { icon, iconButton } from './icon.js';
 import { forwardFormHtml, wireForwardForm, forwardRowHtml } from './forwards.js';
 import { openServices } from './services.js';
 import { startSystemMonitor } from './sysmon.js';
@@ -128,18 +129,17 @@ function renderRecents() {
     const color = identity?.production ? PROD_COLOR : identity?.color;
     return `
     <div class="recent${entry.pinned ? ' is-pinned' : ''}" data-id="${escapeHtml(entry.id)}"${color ? ` style="--chip-color:${escapeHtml(color)}"` : ''}>
-      <button type="button" class="recent__pin" data-act="pin"
-              title="${entry.pinned ? 'Unpin' : 'Pin to the top'}"
-              aria-pressed="${entry.pinned}">${entry.pinned ? '★' : '☆'}</button>
+      ${iconButton(entry.pinned ? 'pin' : 'pin-off', entry.pinned ? 'Unpin' : 'Pin to the top',
+        { size: 15, className: 'recent__pin', attrs: `data-act="pin" aria-pressed="${entry.pinned}"` })}
       <button type="button" class="recent__main" data-act="use"
               title="${needsNoSecret(entry) ? 'Connect now (agent authentication needs no secret)' : 'Fill the form with this server'}">
         <span class="recent__target">${color ? '<i class="recent__swatch" aria-hidden="true"></i>' : ''}${identity?.label ? `${escapeHtml(identity.label)} — ` : ''}${escapeHtml(entry.username)}<span class="recent__at">@</span>${escapeHtml(entry.host)}${entry.port === '22' ? '' : `<span class="recent__at">:</span>${escapeHtml(entry.port)}`}</span>
         <span class="recent__meta">${escapeHtml(describeEntry(entry))}</span>
       </button>
       ${needsNoSecret(entry)
-        ? '<button type="button" class="recent__go" data-act="connect" title="Connect now" aria-label="Connect now">→</button>'
+        ? iconButton('arrow-right', 'Connect now', { size: 15, className: 'recent__go', attrs: 'data-act="connect"' })
         : ''}
-      <button type="button" class="recent__x" data-act="forget" title="Forget this server">✕</button>
+      ${iconButton('x', `Forget ${entry.username}@${entry.host}`, { size: 15, className: 'recent__x', attrs: 'data-act="forget"' })}
     </div>`;
   }).join('');
 }
@@ -537,9 +537,17 @@ function paintIdentity() {
   // session's real state, with the word in the tooltip so it is not colour alone.
   const state = session.status === 'dropped' ? 'dropped'
     : session.status === 'connecting' ? 'reconnecting' : 'live';
+  const DOT = {
+    live:         { name: 'circle-dot', text: 'Connected' },
+    reconnecting: { name: 'loader', text: 'Reconnecting…', className: 'icon--spin' },
+    dropped:      { name: 'unplug', text: 'Connection lost' },
+  }[state];
   dot.className = `dot dot--${state}`;
-  dot.title = { live: 'Connected', reconnecting: 'Reconnecting…', dropped: 'Connection lost' }[state];
-  dot.setAttribute('aria-label', dot.title);
+  dot.title = DOT.text;
+  dot.setAttribute('aria-label', DOT.text);
+  // A spinning loader is silent to a screen reader unless its container says so.
+  dot.setAttribute('role', state === 'reconnecting' ? 'status' : 'img');
+  dot.innerHTML = icon(DOT.name, { size: 13, className: DOT.className || '' });
 
   document.title = `${session.label} · su-ssh`;
 }
@@ -618,7 +626,7 @@ async function loadDesktopIcons(session) {
     const el = document.createElement('div');
     el.className = 'dicon';
     el.tabIndex = 0;
-    el.innerHTML = `<div class="dicon__glyph">${GLYPH[entry.kind] || GLYPH.binary}</div>
+    el.innerHTML = `<div class="dicon__glyph" aria-hidden="true">${fileIcon(entry, 33)}</div>
                     <div class="dicon__name">${escapeHtml(entry.name)}</div>`;
 
     const open = () => {

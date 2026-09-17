@@ -15,23 +15,38 @@
 
 import { createWindow, escapeHtml } from './wm.js';
 import { promptSecret, confirmDialog, formatBytes } from './ui.js';
+import { icon } from './icon.js';
 import { requireSession, hostPhrase, dangerOpts, markActivity, markDropped } from './sessions.js';
 
 /** Buttons on the detail header, in the order they are useful. */
 const PRIMARY_ACTIONS = [
-  { action: 'start', label: 'Start' },
-  { action: 'stop', label: 'Stop', danger: true },
-  { action: 'restart', label: 'Restart' },
-  { action: 'reload', label: 'Reload' },
+  { action: 'start', label: 'Start', icon: 'play' },
+  { action: 'stop', label: 'Stop', danger: true, icon: 'pause' },
+  { action: 'restart', label: 'Restart', icon: 'rotate-cw' },
+  { action: 'reload', label: 'Reload', icon: 'refresh-cw' },
 ];
 
 const MORE_ACTIONS = [
-  { action: 'enable', label: 'Enable at boot' },
-  { action: 'disable', label: 'Disable at boot' },
-  { action: 'mask', label: 'Mask', danger: true },
-  { action: 'unmask', label: 'Unmask' },
-  { action: 'reset-failed', label: 'Clear failed state' },
+  { action: 'enable', label: 'Enable at boot', icon: 'check' },
+  { action: 'disable', label: 'Disable at boot', icon: 'circle-minus' },
+  { action: 'mask', label: 'Mask', danger: true, icon: 'ban' },
+  { action: 'unmask', label: 'Unmask', icon: 'unlock' },
+  { action: 'reset-failed', label: 'Clear failed state', icon: 'eraser' },
 ];
+
+/** unit state -> a distinct SHAPE, so red/green is never the only signal. */
+const STATE_ICON = {
+  ok:   { name: 'circle-check', title: 'Running' },
+  bad:  { name: 'circle-x', title: 'Failed' },
+  warn: { name: 'loader', title: 'Activating', className: 'icon--spin' },
+  idle: { name: 'circle-minus', title: 'Not running' },
+};
+
+const stateIcon = (kind, size = 15) => {
+  const s = STATE_ICON[kind] || STATE_ICON.idle;
+  return `<span class="svc__dot icon--${kind}" role="img" aria-label="${s.title}" title="${s.title}">`
+    + `${icon(s.name, { size, className: s.className || '' })}</span>`;
+};
 
 /** Destructive enough that a misclick should not be enough. */
 const CONFIRM = { stop: 'Stop', restart: 'Restart', disable: 'Disable at boot', mask: 'Mask' };
@@ -52,7 +67,7 @@ export function openServices(startUnit = null) {
   // host, and every confirm it raises names it.
   const session = requireSession();
   const { api, toast } = session;
-  const win = createWindow({ title: 'Services', icon: '⚙', width: 960, height: 620, appId: 'services' });
+  const win = createWindow({ title: 'Services', iconName: 'server', width: 960, height: 620, appId: 'services' });
 
   win.body.innerHTML = `
     <div class="svc">
@@ -72,8 +87,8 @@ export function openServices(startUnit = null) {
               <option value="disabled">Disabled</option>
               <option value="inactive">Inactive</option>
             </select>
-            <button class="tbar__btn" data-role="refresh" title="Refresh the list">⟳</button>
-            <button class="tbar__btn" data-role="daemon-reload" title="systemctl daemon-reload">↻ units</button>
+            <button type="button" class="tbar__btn" data-role="refresh" title="Refresh the list" aria-label="Refresh the list">${icon('refresh-cw', { size: 15 })}</button>
+            <button type="button" class="tbar__btn" data-role="daemon-reload" title="systemctl daemon-reload" aria-label="Run systemctl daemon-reload">${icon('rotate-cw', { size: 15 })}<span>units</span></button>
           </div>
         </div>
         <div class="svc__counts" data-role="counts">Loading…</div>
@@ -127,7 +142,7 @@ export function openServices(startUnit = null) {
                 <option value="override">Drop-in override</option>
               </select>
               <code class="svc__path" data-role="path">—</code>
-              <button class="tbar__btn" data-role="filereload" title="Re-read from the server">⟳</button>
+              <button type="button" class="tbar__btn" data-role="filereload" title="Re-read from the server" aria-label="Re-read from the server">${icon('refresh-cw', { size: 15 })}</button>
               <button class="tbar__btn" data-role="filesave">Save + daemon-reload</button>
               <button class="tbar__btn" data-role="filesaverestart">Save + restart</button>
             </div>
@@ -212,7 +227,7 @@ export function openServices(startUnit = null) {
     }
     $('list').innerHTML = rows.map((s) => `
       <button class="svc__item${s.unit === state.selected ? ' is-selected' : ''}" data-unit="${escapeHtml(s.unit)}">
-        <span class="svc__dot svc__dot--${dotClass(s)}"></span>
+        ${stateIcon(dotClass(s))}
         <span class="svc__itemtext">
           <span class="svc__itemname">${escapeHtml(s.unit.replace(/\.service$/, ''))}</span>
           <span class="svc__itemdesc">${escapeHtml(s.description || s.unitFileState || '')}</span>
@@ -275,10 +290,10 @@ export function openServices(startUnit = null) {
     // button anyway would only produce a failure the user cannot fix here.
     $('actions').innerHTML = PRIMARY_ACTIONS
       .filter((a) => (a.action !== 'reload' || summary.canReload) && (a.action !== 'stop' || summary.canStop))
-      .map((a) => `<button class="btn btn--sm${a.danger ? ' btn--danger' : ''}" data-action="${a.action}">${a.label}</button>`)
+      .map((a) => `<button type="button" class="btn btn--sm${a.danger ? ' btn--danger' : ''}" data-action="${a.action}">${icon(a.icon, { size: 14 })}<span>${a.label}</span></button>`)
       .join('')
       + `<span class="svc__spacer"></span>`
-      + MORE_ACTIONS.map((a) => `<button class="btn btn--sm btn--ghost" data-action="${a.action}">${a.label}</button>`).join('');
+      + MORE_ACTIONS.map((a) => `<button type="button" class="btn btn--sm btn--ghost" data-action="${a.action}">${icon(a.icon, { size: 14 })}<span>${a.label}</span></button>`).join('');
 
     $('status').textContent = statusOutput.trim() || '(no status output)';
 

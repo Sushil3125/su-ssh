@@ -1,5 +1,7 @@
 /** ui.js — toasts and the right-click menu, shared by every app. */
 
+import { icon } from './icon.js';
+
 /**
  * The container is an `aria-live="polite"` region (see index.html), so every
  * toast is announced instead of being visible only to people who happen to be
@@ -23,7 +25,7 @@ export function toast(message, kind = 'info', ms = 3800) {
   }, ms);
 }
 
-/** items: [{ label, onClick, danger }] or 'separator' */
+/** items: [{ label, onClick, danger, icon }] or 'separator' */
 export function contextMenu(x, y, items) {
   const menu = document.getElementById('ctxmenu');
   menu.innerHTML = '';
@@ -36,8 +38,18 @@ export function contextMenu(x, y, items) {
       continue;
     }
     const btn = document.createElement('button');
+    btn.type = 'button';
     btn.className = `ctxmenu__item${item.danger ? ' ctxmenu__item--danger' : ''}`;
-    btn.textContent = item.label;
+    // The label stays the accessible name; the icon is decoration beside it,
+    // which is why it goes in its own aria-hidden slot rather than the text.
+    const slot = document.createElement('span');
+    slot.className = 'ctxmenu__icon';
+    slot.setAttribute('aria-hidden', 'true');
+    if (item.icon) slot.innerHTML = icon(item.icon, { size: 15 });
+    const text = document.createElement('span');
+    text.className = 'ctxmenu__label';
+    text.textContent = item.label;
+    btn.append(slot, text);
     btn.addEventListener('click', () => { hideContextMenu(); item.onClick(); });
     menu.appendChild(btn);
   }
@@ -81,6 +93,7 @@ export function openDialog({
   requireText = null,
   requireLabel = '',
   accent = null,
+  titleIcon = null,
 } = {}) {
   return new Promise((resolve) => {
     const host = document.getElementById('modals');
@@ -99,7 +112,11 @@ export function openDialog({
         </div>
       </form>`;
 
-    wrap.querySelector('.modal__title').textContent = title;
+    const titleEl = wrap.querySelector('.modal__title');
+    titleEl.textContent = title;
+    // Prepended, not concatenated into the string: the icon must not become
+    // part of the heading's accessible name.
+    if (titleIcon) titleEl.insertAdjacentHTML('afterbegin', icon(titleIcon, { size: 18, className: 'icon--warn' }));
     const msg = wrap.querySelector('.modal__msg');
     msg.textContent = message;
     msg.classList.toggle('is-hidden', !message);
@@ -197,9 +214,9 @@ export function openDialog({
 /** Yes/no. Resolves true only on an explicit confirm. */
 export async function confirmDialog({
   title = 'Are you sure?', message = '', confirmLabel = 'Confirm', cancelLabel = 'Cancel',
-  danger = false, requireText = null, requireLabel = '', accent = null,
+  danger = false, requireText = null, requireLabel = '', accent = null, titleIcon = null,
 } = {}) {
-  return (await openDialog({ title, message, confirmLabel, cancelLabel, danger, requireText, requireLabel, accent })) !== null;
+  return (await openDialog({ title, message, confirmLabel, cancelLabel, danger, requireText, requireLabel, accent, titleIcon })) !== null;
 }
 
 /**
@@ -258,11 +275,24 @@ export function formatDate(ms) {
   });
 }
 
+/**
+ * File kind -> Lucide icon name (+ an optional tint class). Lucide has no PDF
+ * glyph, so a PDF is a red `file-text`: a tint plus the filename says more than
+ * an invented glyph would.
+ */
 export const GLYPH = {
-  directory: '📁',
-  text: '📄',
-  image: '🖼️',
-  pdf: '📕',
-  archive: '🗜️',
-  binary: '⚙️',
+  directory: { name: 'folder' },
+  text:      { name: 'file-text' },
+  image:     { name: 'image' },
+  pdf:       { name: 'file-text', className: 'icon--bad' },
+  archive:   { name: 'file-archive' },
+  binary:    { name: 'binary' },
+  symlink:   { name: 'link-2' },
+  broken:    { name: 'file-question', className: 'icon--warn' },
 };
+
+/** The icon markup for a directory entry, at `size` px. */
+export function fileIcon(entry, size = 30) {
+  const g = (entry.broken && GLYPH.broken) || GLYPH[entry.kind] || GLYPH.binary;
+  return icon(g.name, { size, className: g.className || '' });
+}
