@@ -3,8 +3,11 @@
 import { createWindow, escapeHtml } from './wm.js';
 import { contextMenu, confirmDialog, promptDialog, promptSecret, formatBytes, formatDate, fileIcon } from './ui.js';
 import { icon, iconButton } from './icon.js';
-import { forwardFormHtml, wireForwardForm, forwardRowHtml } from './forwards.js';
+import { forwardFormHtml, wireForwardForm, forwardRowHtml, describeSpec } from './forwards.js';
 import { requireSession, hostPhrase, dangerOpts, markActivity, markDropped } from './sessions.js';
+import {
+  profileFor, forwardKeyOf, forgetSavedForward, loadProfiles, onProfilesChange,
+} from './profiles.js';
 import { copySelection, pasteFromClipboard, hintOnce } from './keyboard.js';
 
 const basename = (p) => p.split('/').filter(Boolean).pop() || '/';
@@ -410,7 +413,19 @@ export function openEditor(filePath = null) {
 
 /* ═══════════════════════════════════════════════════════════ terminal ═══ */
 
-export function openTerminal(cwd = null) {
+/**
+ * `fresh` marks a terminal that restore.js reopened after a reconnect.
+ *
+ * The window is *not* the shell the user left — that PTY died with the old SSH
+ * session — and the entire value of putting the window back is lost if anybody
+ * can mistake one for the other. "My command went somewhere" is the failure
+ * this app exists to prevent, so it is said in three places somebody might
+ * actually look: a banner drawn into the terminal above the shell's first
+ * prompt (and it is the top of an empty scrollback, so it cannot be scrolled
+ * past), a permanent "new shell" subtitle in the window's title bar, and the
+ * restore notice on the desktop.
+ */
+export function openTerminal(cwd = null, { fresh = false } = {}) {
   const session = requireSession();
   const { api } = session;
   // Just "Terminal": the title bar already carries the host in .win__host, and
@@ -513,11 +528,29 @@ export function openTerminal(cwd = null) {
   // and every subsequent resize is computed from a wrong baseline.
   requestAnimationFrame(() => { fit.fit(); term.focus(); });
 
+  // Written before the socket even opens, so it is the first thing in the
+  // scrollback and the shell's prompt appears underneath it.
+  if (fresh) {
+    win.setSubtitle('— new shell');
+    win.el.querySelector('.win__title')?.setAttribute('title',
+      'This window was reopened. The shell inside it is new.');
+    const line = '─'.repeat(58);
+    term.writeln(`\x1b[33m┌${line}\x1b[0m`);
+    term.writeln(`\x1b[33m│\x1b[0m \x1b[1;33mThis is a NEW shell on ${session.label}.\x1b[0m`);
+    term.writeln(`\x1b[33m│\x1b[0m The terminal you left ended when that connection closed.`);
+    term.writeln(`\x1b[33m│\x1b[0m Nothing above this line: no scrollback, no shell history,`);
+    term.writeln(`\x1b[33m│\x1b[0m no jobs still running from before.`);
+    if (cwd) term.writeln(`\x1b[33m│\x1b[0m Reopened in \x1b[1m${cwd}\x1b[0m, the directory it was started in.`);
+    term.writeln(`\x1b[33m└${line}\x1b[0m`);
+  }
+
   const socket = new WebSocket(api.terminalUrl(term.cols, term.rows));
   socket.binaryType = 'arraybuffer';
 
   socket.addEventListener('open', () => {
-    if (cwd) socket.send(JSON.stringify({ type: 'input', data: `cd ${shellQuote(cwd)} && clear\n` }));
+    // `clear` would wipe the banner above, which is the one thing here that
+    // must survive. A reopened shell changes directory and says nothing else.
+    if (cwd) socket.send(JSON.stringify({ type: 'input', data: `cd ${shellQuote(cwd)}${fresh ? '' : ' && clear'}\n` }));
   });
 
   socket.addEventListener('message', (e) => {
@@ -548,7 +581,8 @@ export function openTerminal(cwd = null) {
     lost.classList.remove('is-hidden');
     lost.querySelector('[data-act="reconnect"]').addEventListener('click', () => {
       win.close();
-      openTerminal(cwd);
+      // Also a new shell, for the same reason, so it says so the same way.
+      openTerminal(cwd, { fresh: true });
     });
   }
 
@@ -646,10 +680,73 @@ export function openForwards() {
       </details>
       <div class="fwd-app__listhead" data-role="listhead">Forwards</div>
       <div class="fwd-app__list" data-role="list"><p class="fwd-empty">No forwards yet.</p></div>
+
+      <details class="fwd-app__new" data-role="savedfold">
+        <summary class="fwd-app__h" data-role="savedhead">Saved for this server</summary>
+        <p class="hint hint--block">Reopened automatically on every connect to
+          <strong>${escapeHtml(session.username)}@${escapeHtml(session.host)}</strong>, from any browser.
+          Closing a forward above stops that; so does forgetting it here.</p>
+        <div class="fwd-app__list" data-role="saved"></div>
+      </details>
     </div>`;
 
   const list = win.body.querySelector('[data-role="list"]');
+  const savedList = win.body.querySelector('[data-role="saved"]');
   let timer = null;
+
+  /**
+   * The tunnels this server will bring back by itself. Separate from the live
+   * list on purpose: a saved forward that is not running right now (its port
+   * was taken, or the user closed the window it came from) is exactly the thing
+   * the live list cannot show, and it is the thing you came here to delete.
+   */
+  function refreshSaved() {
+    const saved = profileFor(session.target)?.forwards || [];
+    win.body.querySelector('[data-role="savedhead"]').textContent =
+      saved.length ? `Saved for this server · ${saved.length}` : 'Saved for this server · none';
+    // Opened only when there is something in it: a fold that is always open
+    // pushes the primary action — adding a forward — off the top of a 560px
+    // window, which is the bug this app already had once.
+    if (saved.length) win.body.querySelector('[data-role="savedfold"]').open = true;
+    savedList.innerHTML = saved.length
+      ? saved.map((spec) => `
+        <div class="fwd-row fwd-row--saved" data-key="${escapeHtml(forwardKeyOf(spec))}">
+          <span class="fwd-row__badge" role="img" aria-label="Saved forward">${icon('save', { size: 15 })}</span>
+          <div class="fwd-row__main">
+            <div class="fwd-row__title">
+              ${spec.label ? `<strong>${escapeHtml(spec.label)}</strong>` : ''}
+              <code>${escapeHtml(describeSpec(spec))}</code>
+            </div>
+            <div class="fwd-row__meta">reopens on every connect to this server</div>
+          </div>
+          <span class="fwd-row__status fwd-row__status--queued">saved</span>
+          ${iconButton('x', `Forget the saved forward ${describeSpec(spec)}`,
+            { size: 14, className: 'fwd-row__x', attrs: 'data-act="forget"' })}
+        </div>`).join('')
+      : '<p class="fwd-empty">Nothing saved yet. Any forward you open here is remembered for next time.</p>';
+  }
+
+  savedList.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-act="forget"]');
+    if (!btn) return;
+    const row = btn.closest('.fwd-row');
+    const ok = await confirmDialog({
+      title: `Forget this saved forward on ${session.label}?`,
+      message: `${row.querySelector('.fwd-row__title')?.textContent.trim() || 'The tunnel'} will not be reopened `
+        + `the next time you connect to ${hostPhrase(session)}. Any forward running right now keeps running.`,
+      confirmLabel: 'Forget it',
+      danger: true,
+      ...dangerOpts(session),
+    });
+    if (!ok) return;
+    try {
+      await forgetSavedForward(session.target, row.dataset.key);
+      toast('Saved forward forgotten.', 'good');
+    } catch (err) {
+      toast(err.message, 'bad');
+    }
+    refreshSaved();
+  });
 
   async function refresh() {
     try {
@@ -718,23 +815,34 @@ export function openForwards() {
     if (!ok) return;
     try {
       await api.closeForward(id);
-      toast('Forward closed.', 'good');
+      // Closing it by hand also un-saves it on the relay; say so where the
+      // consequence is, rather than leaving the saved list silently stale.
+      toast('Forward closed, and it will not be reopened next time.', 'good');
     } catch (err) {
       toast(err.message, 'bad');
     }
     refresh();
+    loadProfiles().catch(() => { /* the saved list simply stays as it was */ });
   });
 
   wireForwardForm(win.body.querySelector('.fwd-form'), async (spec) => {
     const fwd = await api.addForward(spec);
-    toast(`Forward open: ${fwd.description}`, 'good');
+    toast(`Forward open: ${fwd.description}. Saved for next time.`, 'good');
     refresh();
+    loadProfiles().catch(() => { /* the saved list simply stays as it was */ });
   });
 
   refresh();
+  refreshSaved();
+  // Cheap, and it is the only way this window learns about a forward opened
+  // from another window on the same host.
+  const stopWatching = onProfilesChange(refreshSaved);
+  loadProfiles().catch(() => { /* already painted from the cache */ });
+
   timer = setInterval(refresh, 2000);
-  win.onClose = () => { clearInterval(timer); };  // The forwards themselves keep running.
-  win.onForceClose = () => clearInterval(timer);
+  const stop = () => { clearInterval(timer); stopWatching(); };
+  win.onClose = stop;   // The forwards themselves keep running.
+  win.onForceClose = stop;
   win.restore = () => ({ app: 'ports' });
   return win;
 }

@@ -22,6 +22,11 @@ import {
 } from './security.js';
 import { fsRouter } from './routes-fs.js';
 import { createForward, listForwards, removeForward } from './port-forward.js';
+import {
+  listProfiles, upsertProfile, patchProfile, noteConnected,
+  rememberForward, forgetForward, forgetProfile, forgetUnpinned, migrate,
+  profileId, parseProfileId, forwardKey, sanitiseForward, profileFilePath,
+} from './profiles.js';
 import { terminalRoute } from './terminal-ws.js';
 import { journalRoute } from './journal-ws.js';
 import { metricsRoute } from './metrics-ws.js';
@@ -139,21 +144,48 @@ app.post('/api/connect', throttleConnect, async (req, res, next) => {
     limiter.success(req.ip);
     console.log(`[connect] ${session.meta.username}@${session.meta.host}:${session.meta.port} via ${session.meta.authMethod}`);
 
-    // Forwards requested on the login screen are opened here, one by one. A
-    // forward that cannot bind is reported rather than thrown: losing the whole
-    // session because port 8080 was taken would be a poor trade.
-    const pending = Array.isArray(req.body.forwards) ? req.body.forwards.slice(0, 20) : [];
+    // The profile is the relay's memory of this server: it carries the label
+    // and colour a *different* browser chose, the tunnels that were open last
+    // time, and whether the user wants their windows back.
+    let profile = null;
+    try {
+      profile = noteConnected(session.meta);
+    } catch (err) {
+      // A broken profile file must not cost a working SSH session, but it must
+      // not be swallowed either — the browser shows this next to the desktop.
+      console.warn(`[profiles] ${err.message}`);
+    }
+
+    // Forwards requested on the login screen are opened here, one by one, and
+    // so are the ones this profile had open last time. A forward that cannot
+    // bind is reported rather than thrown: losing the whole session because
+    // port 8080 was taken would be a poor trade, and a saved tunnel whose port
+    // somebody else has taken since is exactly the case that has to survive.
+    const queued = (Array.isArray(req.body.forwards) ? req.body.forwards : [])
+      .map((f) => sanitiseForward(f)).filter(Boolean);
+    const seen = new Set(queued.map(forwardKey));
+    const saved = (profile?.forwards || []).filter((f) => !seen.has(forwardKey(f)));
+
+    const pending = [
+      ...queued.map((spec) => ({ spec, saved: false })),
+      ...saved.map((spec) => ({ spec, saved: true })),
+    ].slice(0, 20);
+
     const forwards = [];
-    for (const spec of pending) {
+    for (const { spec, saved: fromProfile } of pending) {
       try {
-        forwards.push((await createForward(session, spec)).toJSON());
+        forwards.push({ ...(await createForward(session, spec)).toJSON(), saved: fromProfile });
       } catch (err) {
-        forwards.push({ ...spec, status: 'error', error: err.message });
+        forwards.push({ ...spec, status: 'error', error: err.message, saved: fromProfile });
         console.warn(`[forward] ${err.message}`);
       }
     }
+    // Anything queued on the greeter is now part of this server's memory too.
+    for (const spec of queued) {
+      try { profile = rememberForward(session.meta, spec) || profile; } catch { /* reported above */ }
+    }
 
-    res.json({ token: session.token, ...session.meta, forwards });
+    res.json({ token: session.token, ...session.meta, forwards, profile });
   } catch (err) { next(err); }
 });
 
@@ -241,6 +273,9 @@ app.post('/api/forwards', readToken, async (req, res, next) => {
     const session = getSession(req.sessionToken);
     const forward = await createForward(session, req.body);
     console.log(`[forward] opened ${forward.toJSON().description}`);
+    // Opening it is the whole gesture: there is no second thing to press to
+    // have it come back next time.
+    try { rememberForward(session.meta, forward.spec); } catch (err) { console.warn(`[profiles] ${err.message}`); }
     res.json(forward.toJSON());
   } catch (err) { next(err); }
 });
@@ -250,7 +285,73 @@ app.delete('/api/forwards/:id', readToken, async (req, res, next) => {
     const session = getSession(req.sessionToken);
     const forward = await removeForward(session, req.params.id);
     console.log(`[forward] closed ${forward.description}`);
+    // Closing one by hand is how you stop it coming back. Disconnecting is not:
+    // that tears forwards down through the session, not through this route.
+    try {
+      forgetForward(profileId(session.meta), forwardKey(forward));
+    } catch { /* no profile, or none saved — nothing to forget */ }
     res.json({ closed: true, forward });
+  } catch (err) { next(err); }
+});
+
+/* ------------------------------------------------------ connection profiles */
+
+/**
+ * What the relay remembers about the servers you connect to: the recents list,
+ * the label and colour, the saved forwards, the saved window layout and whether
+ * to put it back. It used to live in one browser's localStorage, which is why
+ * configuring in Chrome and opening Firefox looked like amnesia.
+ *
+ * These calls take no session token: a profile describes a server you *might*
+ * connect to, so it has to be readable from the login screen. They are still
+ * behind the access cookie and the Host/Origin guard like everything under
+ * /api — this is the user's list of servers, not public information.
+ *
+ * No route here can write a credential: every path into the file goes through
+ * profiles.js's allowlist sanitiser. See the note at the top of that module.
+ */
+app.get('/api/profiles', (req, res, next) => {
+  try {
+    res.json({ profiles: listProfiles(), file: profileFilePath() });
+  } catch (err) { next(err); }
+});
+
+app.post('/api/profiles/update', (req, res, next) => {
+  try {
+    const body = req.body || {};
+    // Either identify an existing profile by id, or supply the three parts a
+    // new one is built from. Both go through the same validation.
+    const profile = body.id !== undefined && body.host === undefined
+      ? patchProfile(parseProfileId(body.id), body)
+      : upsertProfile(body);
+    res.json({ profile });
+  } catch (err) { next(err); }
+});
+
+app.post('/api/profiles/forget', (req, res, next) => {
+  try {
+    if (req.body?.unpinned === true) return res.json({ forgotten: forgetUnpinned() });
+    const id = parseProfileId(req.body?.id);
+    res.json({ forgotten: forgetProfile(id) ? 1 : 0 });
+  } catch (err) { next(err); }
+});
+
+/** Forget one saved forward without touching the one that may be running. */
+app.post('/api/profiles/forwards/forget', (req, res, next) => {
+  try {
+    const id = parseProfileId(req.body?.id);
+    res.json({ profile: forgetForward(id, String(req.body?.key || '')) });
+  } catch (err) { next(err); }
+});
+
+/**
+ * One-time import of what a browser still has in localStorage. Merging, never
+ * overwriting: a second browser arriving with its own stale copy must not
+ * clobber what is already here.
+ */
+app.post('/api/profiles/migrate', (req, res, next) => {
+  try {
+    res.json({ imported: migrate(req.body || {}), profiles: listProfiles() });
   } catch (err) { next(err); }
 });
 
@@ -384,6 +485,7 @@ server.listen(PORT, HOST, () => {
   if (process.env.ALLOW_PUBLIC_FORWARDS === '1') console.log('  Port forwards may bind non-loopback addresses.');
   if (process.env.ROOT_JAIL) console.log(`  Path jail active: ${process.env.ROOT_JAIL}`);
   console.log(`  Answering to host names: ${describeAllowlist(ALLOWED)}`);
+  console.log(`  Connection profiles (no credentials): ${profileFilePath()}`);
   console.log(`  At most ${MAX_SESSIONS} SSH sessions at once (MAX_SESSIONS).`);
   console.log(IDLE_MINUTES > 0
     ? `  Sessions with no open window close after ${IDLE_MINUTES} idle minute${IDLE_MINUTES === 1 ? '' : 's'}.`

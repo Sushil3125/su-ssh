@@ -13,8 +13,14 @@ import {
 } from './wm.js';
 import {
   noteLayoutChange, installLayoutPersistence, restoreWindows, showRestoreNotice,
-  forgetLayout, clearLayouts,
+  forgetLayout, clearLayouts, restoreProfileWindows, askAboutRestore,
+  hasSavedLayout, setRestoreMode, restoreModeOf, flushLayout,
 } from './restore.js';
+import {
+  loadProfiles, migrateLocalStorage, allProfiles, profileFor, saveProfile,
+  forgetProfile as forgetProfileOnRelay, forgetUnpinnedProfiles, absorbProfile,
+  onProfilesChange,
+} from './profiles.js';
 import { toast, contextMenu, confirmDialog, openDialog, modalOpen, fileIcon } from './ui.js';
 import { icon, iconButton } from './icon.js';
 import { forwardFormHtml, wireForwardForm, forwardRowHtml } from './forwards.js';
@@ -54,30 +60,29 @@ let clockTimer = null;
  * rolling window of the last few, because a list you have to prune by hand
  * stops being a shortcut.
  */
-const RECENTS_KEY = 'ssh-recent-targets';
-const LEGACY_KEY = 'ssh-last-target';
-const MAX_UNPINNED = 8;
-
 const recentsBox = document.getElementById('recents');
 const recentsList = document.getElementById('recents-list');
 
-let recents = loadRecents();
-
-function loadRecents() {
-  let list = [];
-  try { list = JSON.parse(localStorage.getItem(RECENTS_KEY) || '[]'); } catch { list = []; }
-  if (!Array.isArray(list)) list = [];
-
-  // Carry over the single target older builds remembered, so upgrading does
-  // not look like the app forgot where you were working.
-  if (!list.length) {
-    try {
-      const legacy = JSON.parse(localStorage.getItem(LEGACY_KEY) || '{}');
-      if (legacy.host) list = [makeEntry(legacy)];
-    } catch { /* corrupt entry; start fresh */ }
-  }
-  return list.filter((e) => e && e.host && e.username);
+/**
+ * Fill the profile cache from the relay before anything paints, importing
+ * whatever this browser still had in localStorage on the way. Top-level await:
+ * the greeter with an empty recents list, followed a beat later by the real
+ * one, reads as "it forgot" — which is the exact complaint being fixed.
+ */
+let profileError = null;
+try {
+  await loadProfiles();
+  await migrateLocalStorage();
+} catch (err) {
+  // Loudly, not silently: an unreadable profile file means saved servers,
+  // tunnels and layouts are not there, and the user has to know that before
+  // they wonder where their pins went.
+  profileError = err;
+  console.error('[profiles]', err);
 }
+
+/** A profile as the recents list renders it — the port as a string, as the markup expects. */
+const asEntry = (p) => ({ ...p, port: String(p.port || 22) });
 
 function makeEntry(creds) {
   return {
@@ -92,34 +97,17 @@ function makeEntry(creds) {
   };
 }
 
-function saveRecents() {
-  const pinned = recents.filter((e) => e.pinned);
-  const rest = recents.filter((e) => !e.pinned)
-    .sort(byRecency)
-    .slice(0, MAX_UNPINNED);
-  recents = [...pinned, ...rest];
-  localStorage.setItem(RECENTS_KEY, JSON.stringify(recents));
-  localStorage.removeItem(LEGACY_KEY);
-  renderRecents();
-}
-
 const byRecency = (a, b) => String(b.lastConnected || '').localeCompare(String(a.lastConnected || ''));
 
-/** Record a successful connection. Only ever called after the relay said yes. */
-function rememberTarget(creds) {
-  const id = targetId(creds);
-  const existing = recents.find((e) => e.id === id);
-  const entry = existing || makeEntry(creds);
-  entry.authMethod = creds.authMethod;
-  entry.count = (entry.count || 0) + 1;
-  entry.lastConnected = new Date().toISOString();
-  if (!existing) recents.push(entry);
-  saveRecents();
+function sortedRecents() {
+  return allProfiles().map(asEntry)
+    .sort((a, b) => (Number(b.pinned) - Number(a.pinned)) || byRecency(a, b));
 }
 
-function sortedRecents() {
-  return [...recents].sort((a, b) => (Number(b.pinned) - Number(a.pinned)) || byRecency(a, b));
-}
+const recentById = (id) => {
+  const p = profileFor(id);
+  return p ? asEntry(p) : null;
+};
 
 const AUTH_LABEL = { password: 'password', key: 'private key', keyfile: 'key file', agent: 'agent' };
 
@@ -191,11 +179,11 @@ function useRecent(entry) {
   document.getElementById(focusTarget)?.focus();
 }
 
-recentsList.addEventListener('click', (e) => {
+recentsList.addEventListener('click', async (e) => {
   const btn = e.target.closest('[data-act]');
   if (!btn) return;
   const id = btn.closest('.recent').dataset.id;
-  const entry = recents.find((r) => r.id === id);
+  const entry = recentById(id);
   if (!entry) return;
 
   if (btn.dataset.act === 'connect') { useRecent(entry); return form.requestSubmit(); }
@@ -207,33 +195,47 @@ recentsList.addEventListener('click', (e) => {
     if (needsNoSecret(entry)) form.requestSubmit();
     return;
   }
-  if (btn.dataset.act === 'pin') { entry.pinned = !entry.pinned; return saveRecents(); }
+  // Pinning and forgetting are relay-side now, so they hold for every browser.
+  if (btn.dataset.act === 'pin') {
+    try { await saveProfile({ id, pinned: !entry.pinned }); }
+    catch (err) { toast(`Could not save that: ${err.message}`, 'bad', 8000); }
+    return;
+  }
   if (btn.dataset.act === 'forget') {
-    recents = recents.filter((r) => r.id !== id);
-    return saveRecents();
+    try { await forgetProfileOnRelay(id); }
+    catch (err) { toast(`Could not forget that server: ${err.message}`, 'bad', 8000); }
   }
 });
 
 recentsList.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' || !e.target.closest('[data-act="use"]')) return;
   // Enter on the row is the keyboard equivalent of the → button.
-  const entry = recents.find((r) => r.id === e.target.closest('.recent').dataset.id);
+  const entry = recentById(e.target.closest('.recent').dataset.id);
   if (entry && needsNoSecret(entry)) { e.preventDefault(); useRecent(entry); form.requestSubmit(); }
 });
 
 document.getElementById('recents-clear').addEventListener('click', async () => {
   const ok = await confirmDialog({
     title: 'Clear unpinned connections?',
-    message: 'Pinned servers are kept. Nothing on the servers themselves changes.',
+    message: 'Pinned servers are kept, with their labels, saved tunnels and saved windows. '
+      + 'This clears them on the relay, so it clears them for every browser. '
+      + 'Nothing on the servers themselves changes.',
     confirmLabel: 'Clear',
     danger: true,
   });
   if (!ok) return;
-  recents = recents.filter((e) => e.pinned);
-  saveRecents();
+  try { await forgetUnpinnedProfiles(); }
+  catch (err) { toast(`Could not clear those: ${err.message}`, 'bad', 8000); }
 });
 
+// The list repaints whenever the relay's answer changes — including after a
+// pin, a rename made from the rail, or a forward saved by another window.
+onProfilesChange(() => renderRecents());
 renderRecents();
+
+if (profileError) {
+  toast(`Saved servers could not be read from the relay: ${profileError.message}`, 'bad', 15000);
+}
 
 // Start on the most recent target, the way the previous build did — but only
 // as a prefill, so the list above is still the way you switch between servers.
@@ -426,7 +428,10 @@ form.addEventListener('submit', async (e) => {
     // Not relayApi.connect: this resolves a first-use host key prompt and
     // refuses a changed one. See host-trust.js.
     const meta = await connectWithTrust(creds);
-    rememberTarget(creds);
+    // The relay counted this connection and handed back the profile it now
+    // holds — label, colour, saved forwards, saved layout. Nothing is written
+    // to this browser's storage; that is the whole point.
+    if (meta.profile) absorbProfile(meta.profile);
 
     // Clear the secrets from the DOM the moment they are no longer needed.
     document.getElementById('f-password').value = '';
@@ -441,6 +446,9 @@ form.addEventListener('submit', async (e) => {
     activate(session);
     reportForwards(session, meta.forwards);
     toast(`Connected to ${session.label}.`, 'good');
+    // Last, and awaited: the windows go back on top of a desktop that is
+    // already live, and the ask-once dialog is the only thing on screen.
+    await offerWorkspaceRestore(session);
   } catch (err) {
     // The overlay stays open with the error and the form intact; whatever was
     // active underneath is untouched and still active.
@@ -452,13 +460,45 @@ form.addEventListener('submit', async (e) => {
   }
 });
 
-/** Say plainly which queued tunnels came up and which did not. */
+/**
+ * Say plainly which tunnels came up and which did not — queued on the greeter
+ * and reopened from this server's saved list alike. A saved forward whose port
+ * has been taken since is a normal, expected outcome and must not look like a
+ * broken connection, so it is named as one failure among several rather than
+ * swallowed or escalated.
+ */
 function reportForwards(session, forwards = []) {
   const failed = forwards.filter((f) => f.status === 'error');
-  const ok = forwards.length - failed.length;
-  if (ok) session.toast(`${ok} port forward${ok === 1 ? '' : 's'} open.`, 'good');
-  for (const f of failed) session.toast(`Forward failed: ${f.error}`, 'bad', 8000);
+  const ok = forwards.filter((f) => f.status !== 'error');
+  const reopened = ok.filter((f) => f.saved).length;
+  if (ok.length) {
+    session.toast(`${ok.length} port forward${ok.length === 1 ? '' : 's'} open`
+      + `${reopened ? ` (${reopened} reopened from last time)` : ''}.`, 'good');
+  }
+  for (const f of failed) {
+    session.toast(f.saved
+      ? `Saved forward could not reopen: ${f.error}`
+      : `Forward failed: ${f.error}`, 'bad', 9000);
+  }
   if (failed.length) openForwards();
+}
+
+/**
+ * Put this server's windows back, asking first if we never have.
+ *
+ * Wrapped whole: a failed restore must cost the layout, never the session the
+ * user just successfully opened.
+ */
+async function offerWorkspaceRestore(session) {
+  try {
+    if (!hasSavedLayout(session)) return;
+    await askAboutRestore(session);
+    const summary = restoreProfileWindows(session);
+    if (summary) showRestoreNotice(summary);
+  } catch (err) {
+    console.warn('[restore]', err);
+    session.toast(`Could not reopen the saved windows: ${err.message}`, 'bad', 8000);
+  }
 }
 
 /* ══════════════════════════════════════════════════════════ desktop ════ */
@@ -887,7 +927,7 @@ function handleDrop(session, reason = 'connection lost') {
 
 /** Reconnect a dropped entry: same rail slot, new token, fresh workspace. */
 function reconnect(session) {
-  const entry = recents.find((r) => r.id === session.target)
+  const entry = recentById(session.target)
     || makeEntry({ host: session.host, port: session.port, username: session.username, authMethod: 'password' });
   openGreeter({ asOverlay: allSessions().length > 1, prefill: entry, replace: session });
 }
@@ -942,6 +982,11 @@ async function disconnectOne(session) {
   });
   if (!ok) return;
 
+  // Write the layout to the relay *before* the windows close. Pressing
+  // Disconnect is the clearest possible statement of "this is the screen I am
+  // leaving"; a debounced write that has not fired yet would lose it.
+  try { await flushLayout(session); } catch { /* the layout is not worth failing a disconnect */ }
+
   // Editors with unsaved work get their say first, naming the session.
   if (!await closeWindowsWithConsent(session)) return;
 
@@ -985,6 +1030,7 @@ async function disconnectAll() {
   if (!ok) return;
 
   for (const session of sessions) {
+    try { await flushLayout(session); } catch { /* as above */ }
     if (!await closeWindowsWithConsent(session)) return;
   }
   for (const session of sessions) {
@@ -1008,25 +1054,39 @@ async function renameSession(session) {
   const result = await openDialog({
     title: `Name for ${session.username}@${session.host}`,
     message: 'The label and colour are how this server is told apart from the others — in the rail, '
-      + 'the top bar, every window title and every confirmation. They are remembered for this target '
-      + 'on this browser only.',
+      + 'the top bar, every window title and every confirmation. They are stored on the relay, so '
+      + 'every browser that reaches this relay sees them.',
     fields: [
       { name: 'label', label: 'Label', value: session.label },
       { name: 'env', label: 'Environment tag (optional)', value: session.env, placeholder: ENV_TAGS.filter(Boolean).join(' / '),
         hint: 'Tagging a host "prod" forces the red colour and makes destructive confirmations ask you to type its host name.' },
       { name: 'color', label: 'Colour', value: session.color, placeholder: PALETTE.join(' ') },
+      // Where the ask-once answer is changed afterwards. It sits with the other
+      // per-server settings because that is the only place someone would look.
+      { name: 'restore', label: 'Reopen windows on connect', value: restoreModeOf(session.target),
+        placeholder: 'yes / no / ask',
+        hint: 'yes = put the windows back every time · no = always start empty · ask = ask me once more. '
+          + 'Reopened terminals are always new shells and are labelled as such.' },
     ],
     confirmLabel: 'Save',
     accent: session.color,
   });
   if (!result) return;
   const env = result.env.trim().toLowerCase();
-  saveIdentity(session.target, {
-    label: result.label.trim() || session.label,
-    env,
-    production: env === 'prod',
-    color: /^#[0-9a-f]{6}$/i.test(result.color.trim()) ? result.color.trim() : session.color,
-  });
+  try {
+    await saveIdentity(session.target, {
+      label: result.label.trim() || session.label,
+      env,
+      production: env === 'prod',
+      color: /^#[0-9a-f]{6}$/i.test(result.color.trim()) ? result.color.trim() : session.color,
+    });
+    const mode = result.restore.trim().toLowerCase();
+    if (['yes', 'no', 'ask'].includes(mode) && mode !== restoreModeOf(session.target)) {
+      await setRestoreMode(session.target, mode);
+    }
+  } catch (err) {
+    toast(`Could not save that on the relay: ${err.message}`, 'bad', 9000);
+  }
   paintIdentity();
   renderRail();
   renderRecents();

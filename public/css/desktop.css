@@ -1431,6 +1431,9 @@ button.ovtile:hover { border-color: var(--orange); background: rgba(233, 84, 32,
 .fwd-row--error   { border-left-color: var(--red); }
 .fwd-row--queued  { border-left-color: var(--orange); }
 .fwd-row--stopped { opacity: .6; }
+/* A tunnel this server will bring back by itself: not running now, not an
+   error — an intention. Dashed, so it never reads as a live row. */
+.fwd-row--saved   { border-left-color: var(--blue, #3584E4); border-left-style: dashed; }
 
 .fwd-row__badge {
   display: grid;
@@ -1562,7 +1565,10 @@ button.ovtile:hover { border-color: var(--orange); background: rgba(233, 84, 32,
   flex-direction: column;
   overflow: hidden;
 }
-.fwd-app__list { flex: 1; overflow-y: auto; padding: 8px 12px 12px; }
+.fwd-app__list { flex: 1; min-height: 80px; overflow-y: auto; padding: 8px 12px 12px; }
+/* The saved list lives inside a fold and grows with its contents; it must not
+   claim a share of the live list's height or scroll inside itself. */
+.fwd-app__new .fwd-app__list { flex: none; overflow: visible; }
 /* The form is above the list now (S5). It collapses so that once the tunnels
    you wanted are open, the list can own the window again. */
 .fwd-app__new {

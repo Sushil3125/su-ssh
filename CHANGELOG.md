@@ -2,6 +2,71 @@
 
 ## Unreleased
 
+### Saved on the relay, not in one browser
+
+The complaint: *"I configured things in browser A, but when I open the same
+thing in browser B the previous connection config and other things are gone."*
+Everything the desktop remembered lived in one browser's `localStorage`, which
+is per browser, per profile and per machine. It now lives on the relay host.
+
+- **Connection profiles** (`server/profiles.js`, `public/js/profiles.js`) in
+  `~/.config/su-ssh/profiles.json` — `$XDG_CONFIG_HOME` honoured, directory
+  `0700`, file `0600`, write-then-rename, and a corrupt file is a loud error
+  naming the path rather than a silent "you have no saved servers". The path is
+  printed in the start-up banner. One profile per `user@host:port`: host, port,
+  username, auth **method**, label, colour, environment tag, pinned, connection
+  count, last connected, saved forwards, restore preference and saved layout.
+- **Never a credential, and enforced.** Every write is rebuilt field by field
+  from an allowlist, so a client that posts `password`, `privateKey` or
+  `passphrase` has it dropped rather than written. Ids and forward specs from
+  the browser are re-parsed and re-derived before use.
+- **API:** `GET /api/profiles`, `POST /api/profiles/update`,
+  `POST /api/profiles/forget`, `POST /api/profiles/forwards/forget`,
+  `POST /api/profiles/migrate`. Tokenless, because the greeter needs them before
+  any session exists, and behind the same access cookie and Host/Origin guard as
+  the rest of `/api`.
+- **The recents list and per-host identity moved.** `ssh-recent-targets` and
+  `ssh-host-identity` are imported into the profile store once, on first load,
+  and then removed from the browser. The relay merges rather than overwrites, so
+  a second browser arriving later with its own stale copy cannot undo the first.
+  `sessionStorage` still holds the per-tab session tokens and the refresh-path
+  layout, which is correct: those are per tab by definition.
+- **Survives a relay restart and a reboot**, because it is a file.
+
+### Port forwards persist per server
+
+- Opening a forward saves its spec against that server; the next connect reopens
+  it automatically, alongside anything queued on the greeter, and reports each
+  one separately — so a saved tunnel whose port has since been taken is named in
+  a toast rather than costing you the session.
+- Closing a forward by hand un-saves it. Disconnecting does not: that is the
+  whole point.
+- The **Ports app** now has a *Saved for this server* fold listing what will be
+  reopened, with a button to forget each one, and says where the saving happens.
+
+### Your windows come back when you reconnect, not only when you refresh
+
+- What was open, where, minimised or maximised, in which z-order and what each
+  window was showing is written to the profile and restored on the next connect
+  to that host — per profile, so two hosts connected at once keep their own
+  layouts, and a restored window is bound to its own session's `createApi`
+  client as every hand-opened window is.
+- **Asked once per server**, the first time there is something worth restoring,
+  with **Reopen them** as the primary action holding focus (so Enter is yes).
+  The answer is stored on the relay, so a second browser inherits it instead of
+  asking again. Changeable afterwards from the connection's name dialog
+  (`yes` / `no` / `ask`) or the *Don't reopen next time* button on the notice.
+- **Terminals are reopened on a reconnect** — the previous rule, that a refresh
+  must never resurrect a terminal, still stands and is unchanged. A reopened
+  terminal returns to its old working directory and is marked a **new shell** in
+  three places: a banner drawn into the terminal before the shell's first prompt
+  (naming the directory and saying there is no scrollback, no history and
+  nothing still running), `Terminal — new shell` permanently in the title bar,
+  and the restore notice. The banner is the top of an empty scrollback, and the
+  usual `clear` after `cd` is suppressed so nothing can erase it.
+- A freshly connected desktop cannot overwrite its own saved layout with the
+  emptiness it has for the second before the restore runs.
+
 ### A real icon system
 - **Every emoji and character icon is gone.** The file-type map (📁 📄 🖼️ 📕 🗜️ ⚙️ ❓),
   the window controls (`–` `□` `✕`), the taskbar glyphs, the Files toolbar

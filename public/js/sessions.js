@@ -20,6 +20,7 @@
 
 import { createApi, relayApi } from './api.js';
 import { toast as rawToast } from './ui.js';
+import { identityOf, saveProfile } from './profiles.js';
 
 /* ───────────────────────────────────────────────────────────── identity ── */
 
@@ -48,31 +49,42 @@ export const ENV_TAGS = ['', 'dev', 'staging', 'prod'];
 /** How many sessions one browser tab will hold. Eight = eight number shortcuts. */
 export const MAX_PER_TAB = 8;
 
-const IDENTITY_KEY = 'ssh-host-identity';
 const SESSIONS_KEY = 'ssh-sessions';
 const ACTIVE_KEY = 'ssh-active-session';
 const LEGACY_TOKEN_KEY = 'ssh-token';
 
 export const targetId = (c) => `${c.username}@${c.host}:${c.port || 22}`;
 
-/** Identity the user has chosen for a target, kept alongside the recents list. */
-function loadIdentities() {
-  try { return JSON.parse(localStorage.getItem(IDENTITY_KEY) || '{}') || {}; } catch { return {}; }
-}
-
+/**
+ * Identity the user has chosen for a target. It lives in the relay's profile
+ * store, not in this browser: naming a host "prod-db" and colouring it red is
+ * exactly the configuration that used to vanish when you opened a second
+ * browser. Reads come from the profile cache (synchronous, filled at boot);
+ * the write is a round trip, and the live sessions are re-labelled immediately
+ * rather than waiting for it.
+ */
 export function identityFor(target) {
-  return loadIdentities()[target] || null;
+  return identityOf(target);
 }
 
 export function saveIdentity(target, patch) {
-  const all = loadIdentities();
-  all[target] = { ...(all[target] || {}), ...patch };
-  localStorage.setItem(IDENTITY_KEY, JSON.stringify(all));
+  const next = { ...(identityOf(target) || {}), ...patch };
   // Re-label any live session on that target so the change lands everywhere at once.
   for (const s of sessions) {
-    if (s.target === target) applyIdentity(s, all[target]);
+    if (s.target === target) applyIdentity(s, next);
   }
   notify();
+
+  const [username, rest] = target.split('@');
+  const at = rest.lastIndexOf(':');
+  return saveProfile({
+    id: target,
+    username, host: rest.slice(0, at), port: Number(rest.slice(at + 1)) || 22,
+    label: next.label ?? '',
+    color: next.color ?? '',
+    env: next.env ?? '',
+    production: !!next.production,
+  }).then(() => { notify(); });
 }
 
 /**

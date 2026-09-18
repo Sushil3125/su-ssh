@@ -81,6 +81,17 @@ export const relayApi = {
 
   /** Batched liveness check. The relay answers only for the tokens we send. */
   validateSessions: (tokens) => request(null, 'POST', '/api/sessions/validate', { body: { tokens } }),
+
+  /* Connection profiles: the relay's memory of which servers you use, what you
+     call them, which tunnels to reopen and which windows to put back. Tokenless
+     on purpose — the greeter needs them before any session exists, and they
+     describe a server rather than a live connection. Never a credential; see
+     profiles.js on both sides for why that is enforced and not just intended. */
+  profiles:           ()      => request(null, 'GET', '/api/profiles'),
+  updateProfile:      (patch) => request(null, 'POST', '/api/profiles/update', { body: patch }),
+  forgetProfile:      (body)  => request(null, 'POST', '/api/profiles/forget', { body }),
+  forgetSavedForward: (body)  => request(null, 'POST', '/api/profiles/forwards/forget', { body }),
+  migrateProfiles:    (body)  => request(null, 'POST', '/api/profiles/migrate', { body }),
 };
 
 /**
