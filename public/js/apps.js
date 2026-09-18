@@ -390,13 +390,18 @@ export function openEditor(filePath = null) {
     }
   });
 
+  // Every other destructive confirm in this app names the host it is about;
+  // this one used to say only "Discard unsaved changes?", which with four
+  // sessions open is a question about no particular machine.
   win.onClose = async () => {
     if (!dirty) return true;
     return confirmDialog({
-      title: 'Discard unsaved changes?',
-      message: `${pathInput.value || 'This file'} has edits that have not been written to the server.`,
+      title: `Discard unsaved changes on ${session.label}?`,
+      message: `${pathInput.value || 'This file'} on ${hostPhrase(session)}`
+        + ' has edits that have not been written to the server.',
       confirmLabel: 'Discard',
       danger: true,
+      ...dangerOpts(session),
     });
   };
 

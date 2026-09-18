@@ -23,6 +23,8 @@
   --font-mono: "Ubuntu Mono", ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, monospace;
 
   --topbar-h: 30px;
+  /* Clear air between a chip's switch target and its secondary control. */
+  --chip-act-gap: 4px;
   --dock-w: 72px;
   /* The host rail sits left of the app dock: "which machine" then "which app". */
   --rail-w: 60px;
@@ -421,14 +423,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 
 /* The live meters say more about the machine than the static build string, so
    the string is what goes when the bar runs short. */
-@media (max-width: 1500px) { .topbar__sys { max-width: 26ch; } }
+@media (max-width: 1500px) { .topbar__sys { max-width: 18ch; } }
 @media (max-width: 1180px) { .topbar__sys { display: none; } }
-/* The chip is the last thing to give up room: at 360px the clock and the
-   meters are gone and the label still reads as a whole host name. */
-@media (max-width: 620px) {
-  .topbar__centre { display: none; }
-  .topbar__chip { max-width: none; }
-}
 .topbar__btn {
   display: inline-flex;
   align-items: center;
@@ -469,15 +465,25 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   align-items: center;
   gap: 7px;
   min-width: 0;
-  max-width: 34ch;
+  /* Room for a `user@host:port` and a PROD tag without truncating either. The
+     old 34ch clipped "prod-db@127.0.0.1:37353" at 1440px — the §3.6.3 order
+     then did its job and ate the user half, but nothing needed eating. */
+  max-width: 48ch;
+  /* Capped, but never shrunk below that cap: .sysmon is what gives way. */
+  flex: 0 0 auto;
   padding: 2px 9px 2px 7px;
   border: 1px solid var(--chip-color, var(--line-strong));
   border-left: 3px solid var(--chip-color, var(--line-strong));
   border-radius: 5px;
   background: color-mix(in srgb, var(--chip-color, #fff) 14%, transparent);
 }
-/* The host name is the one thing that must never be dropped, at any width. */
-#topbar-conn { overflow: hidden; text-overflow: ellipsis; min-width: 6ch; }
+/* The host name is the one thing that must never be dropped, at any width.
+   Both halves can ellipsise, but `flex-shrink` is distributed in proportion to
+   the factor, so at 999:1 the "user@" lead is eaten to nothing before the host
+   loses its first character. Spec §3.6.3. */
+#topbar-conn { display: inline-flex; min-width: 0; overflow: hidden; }
+.conn__lead { flex: 0 999 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.conn__host { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .topbar__env {
   flex: none;
   padding: 0 5px;
@@ -516,7 +522,6 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 }
 .rail__list { display: flex; flex-direction: column; gap: 6px; overflow: auto; }
 
-.chip { position: relative; }
 .chip__main {
   position: relative;
   display: grid;
@@ -577,36 +582,48 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   background: var(--orange);
   box-shadow: 0 0 0 2px rgba(0, 0, 0, .4);
 }
-/* Disconnect / Reconnect takes over the chip's bottom row rather than floating
-   over the initials — at 60px wide there is no room for an overlay that does
-   not hide the one thing the chip exists to show. */
+/* The chip's secondary control: Reconnect on a dropped session, and a ⋮ menu
+   button where there is no right-click to reach the menu with (touch).
+   
+   It is a SIBLING of the switch target in a flex column, not an overlay on it.
+   It used to be `position:absolute; right:3px; bottom:2px` — 26×24px sitting on
+   roughly a fifth of `.chip__main`, 0px between the two, with Disconnect behind
+   a single confirm. A destructive action cannot share edges with the control
+   you press dozens of times an hour; `--chip-act-gap` is the guarantee it no
+   longer does, and the test measures it. */
+.chip {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--chip-act-gap);
+}
+/* Neither half may be squeezed out of existence by a short rail: a 12px
+   remnant of a 26px button is a target nobody can hit. */
+.chip__main, .chip__act { flex: none; }
 .chip__act {
-  position: absolute;
-  right: 3px;
-  bottom: 2px;
-  width: 26px;
+  width: 100%;
+  min-height: 26px;
   display: none;
   place-items: center;
-  min-height: 24px;
-  border: 0;
+  border: 1px solid var(--line);
   border-radius: 5px;
   background: var(--chrome-lift);
   color: var(--ink-muted);
   font-size: 12px;
+  cursor: pointer;
 }
-.chip:hover .chip__act, .chip:focus-within .chip__act, .chip--dropped .chip__act { display: grid; }
-/* Without a pointer there is no hover, so a control that only appears on hover
-   is a control that does not exist. On touch it is always there. */
+/* A dropped session is not usable until you act on it, so its Reconnect is
+   always there. Everything else reaches the menu by right-click (pointer),
+   the ⋮ button (touch) or Shift+F10 / the Menu key (keyboard). */
+.chip--dropped .chip__act { display: grid; color: var(--orange-lift); }
+/* Without a pointer there is no right-click and no hover, so the menu needs a
+   button of its own. It is never the disconnect button — it opens the menu. */
 @media (hover: none) {
   .chip__act { display: grid; }
-  .chip__count { visibility: hidden; }
 }
-.chip--dropped .chip__act { color: var(--orange-lift); }
-.chip__act:hover { background: var(--red); color: #fff; }
-.chip__act { cursor: pointer; }
-/* It covers the window count, never the environment tag: "PROD" is the last
-   thing that should disappear from a chip. */
-.chip:hover .chip__count, .chip:focus-within .chip__count, .chip--dropped .chip__count { visibility: hidden; }
+.chip__act:hover, .chip__act:focus-visible { border-color: var(--line-strong); color: var(--ink); }
+.chip--dropped .chip__act:hover { border-color: var(--orange); }
+/* The count sits inside the switch target and nothing covers it any more. */
 
 .rail__btn {
   display: grid;
@@ -1273,6 +1290,26 @@ button.ovtile:hover { border-color: var(--orange); background: rgba(233, 84, 32,
 }
 
 
+/* ---- responsive: the top bar below 620px ------------------------------
+   This lives *after* .topbar__chip and .topbar__btn deliberately. It used to
+   sit up beside the other top-bar media queries, above those rules — so
+   `max-width: none` lost to `.topbar__chip { max-width: 34ch }` on source
+   order alone and never took effect, which is how the host ended up
+   ellipsised at 360px with the bar half empty. Equal specificity: order is
+   the whole rule. */
+@media (max-width: 620px) {
+  /* The chip is the last thing to give up room: at 360px the clock and the
+     meters are gone and the label still reads as a whole host name. */
+  .topbar__centre { display: none; }
+  /* The chip takes whatever is left and the right-hand side stops competing
+     for it: keyboard capture is a desktop affordance that needs a physical
+     keyboard, and Disconnect keeps its icon and its accessible name without
+     spending 9ch on the word. */
+  .topbar__chip { max-width: none; flex: 1 1 auto; min-width: 0; }
+  .topbar__btn--capture { display: none; }
+  #btn-disconnect span { display: none; }
+}
+
 /* ---- responsive: below 720px the dock goes horizontal ------------------ */
 
 @media (max-width: 720px) {
@@ -1283,20 +1320,29 @@ button.ovtile:hover { border-color: var(--orange); background: rgba(233, 84, 32,
     inset: auto 0 60px 0;
     flex-direction: row;
     width: 100%;
-    height: 62px;
+    /* 44 (switch) + 4 (gap) + 26 (action) + 4 (scrollbar) + 12 (padding).
+       Sized from the stack, not guessed: at 62px the bottom row of every chip
+       was cropped, and at 86px the horizontal scrollbar sat on top of it. */
+    height: 90px;
     padding: 6px;
     border-right: 0;
     border-top: 1px solid var(--line);
   }
-  .rail__list { flex-direction: row; overflow-x: auto; overflow-y: hidden; }
+  .rail__list {
+    flex-direction: row;
+    align-items: flex-start;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+  }
+  .rail__list::-webkit-scrollbar { height: 3px; }
+  .rail__list::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 999px; }
   /* Tall enough for the always-visible action row underneath the initials. */
-  .chip__main { width: 62px; min-height: 48px; }
+  .chip__main { width: 62px; min-height: 44px; }
   .chip__act { display: grid; }
-  .chip__count { visibility: hidden; }
-  .rail__btn { width: 44px; min-height: 48px; flex: none; }
-  .windows { inset: calc(var(--topbar-h) + 2px) 0 122px 0; }
-  .desktop { inset: var(--topbar-h) 0 122px 0; }
-  .topbar__chip { max-width: 20ch; }
+  .rail__btn { width: 44px; min-height: 44px; flex: none; }
+  .windows { inset: calc(var(--topbar-h) + 2px) 0 150px 0; }
+  .desktop { inset: var(--topbar-h) 0 150px 0; }
   .dock {
     inset: auto 0 0 0;
     flex-direction: row;
@@ -1335,9 +1381,13 @@ button.ovtile:hover { border-color: var(--orange); background: rgba(233, 84, 32,
   .dock__label { display: none; }
   .win { border-radius: 0; }
 
-  /* At card width the top bar's chip is the session identity and only one
-     session's windows exist on screen, so a title-bar host label truncated to
-     "u@…" costs the window title space and says nothing. */
+  /* THE RULE, stated once so it can be asserted: the host is named in exactly
+     one always-visible place — the top-bar chip. `.win__host` is a second copy
+     for the benefit of tiled windows, and it exists only where there is room
+     for it to be readable. Below 721px windows are full-bleed and one at a
+     time, the chip is right there, and a title-bar host squeezed to "u@…"
+     costs the window title space while saying nothing. So: shown above 720px,
+     `display: none` at or below it — never present-but-zero-width. */
   .win__host { display: none; }
 }
 
@@ -2023,6 +2073,13 @@ button.ovtile:hover { border-color: var(--orange); background: rgba(233, 84, 32,
   border-left: 1px solid var(--line);
   font-size: 11px;
   line-height: 1;
+  /* The meters yield before the identity chip does. They were the thing
+     actually squeezing the host name at 1440px: 511px of bars against a chip
+     that had to give up "prod-db@" to fit. A meter losing its last digit costs
+     nothing; the host name is the one thing on this bar that must be right. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
 }
 .sysmon.is-hidden { display: none; }
 
