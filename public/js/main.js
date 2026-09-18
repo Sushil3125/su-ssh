@@ -371,7 +371,19 @@ greeter.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && overlay && !modalOpen()) { e.preventDefault(); closeGreeter(); }
 });
 
+/**
+ * Refused while a modal is open, for the same reason `activate()` is.
+ *
+ * Without this the Alt+Shift+N path walked straight past the guard: the connect
+ * form is not a modal, so it opened over the dialog, the SSH session was really
+ * established, and then `activate()` refused it — leaving a live session to a
+ * second host that the top bar, the tab title and the workspace all denied
+ * existed. There is no acceptable version of "connected and invisible".
+ */
 async function requestAddConnection() {
+  if (modalOpen()) {
+    return toast('Answer the open dialog before adding a connection.', 'bad');
+  }
   if (atFull()) {
     return toast(`Limit of ${MAX_PER_TAB} connections reached. Disconnect one first.`, 'bad', 6000);
   }
@@ -438,7 +450,7 @@ form.addEventListener('submit', async (e) => {
     if (replacing) discardSession(replacing);
     const session = createSession(meta, { position: slot });
     closeGreeter();
-    activate(session);
+    activate(session, { force: true });
     reportForwards(session, meta.forwards);
     toast(`Connected to ${session.label}.`, 'good');
   } catch (err) {
@@ -481,9 +493,11 @@ function createSession(meta, { position = null, saved = null } = {}) {
  * by the session you are looking at, and answering it while looking at a
  * different desktop is the exact mistake this feature exists to prevent.
  */
-function activate(session) {
+function activate(session, { force = false } = {}) {
   if (!session) return false;
-  if (modalOpen()) {
+  // `force` is for a session that was created a moment ago: refusing to show it
+  // does not undo the connection, it only hides it. Nothing else passes it.
+  if (!force && modalOpen()) {
     toast('Answer the open dialog before switching servers.', 'bad');
     return false;
   }
@@ -691,8 +705,13 @@ function paintIdentity() {
     return;
   }
   chip.style.setProperty('--chip-color', session.color);
-  document.getElementById('topbar-conn').textContent = session.label;
-  document.getElementById('topbar-conn').title = hostPhrase(session);
+  // Split at the last "@" so the host half can be the one that survives a
+  // squeeze (spec §3.6.3); a renamed session with no "@" is all host.
+  const at = session.label.lastIndexOf('@');
+  const conn = document.getElementById('topbar-conn');
+  conn.querySelector('.conn__lead').textContent = at > 0 ? session.label.slice(0, at + 1) : '';
+  conn.querySelector('.conn__host').textContent = at > 0 ? session.label.slice(at + 1) : session.label;
+  conn.title = hostPhrase(session);
   const env = document.getElementById('topbar-env');
   env.textContent = session.env || '';
   env.classList.toggle('is-hidden', !session.env);

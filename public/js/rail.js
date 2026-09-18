@@ -57,6 +57,31 @@ function uniqueInitials(sessions) {
   });
 }
 
+/**
+ * Everything a chip can do that is not "switch to it".
+ *
+ * Disconnect lives here and nowhere else on a pointer device. It used to be a
+ * 26×24 button pinned to the chip's bottom-right corner, overlapping the switch
+ * target by roughly a fifth of its area with a 0px gap between them — a
+ * destructive, one-click-confirmed action one pixel from the control you press
+ * dozens of times an hour. A chip is 60px wide; it does not have room for two
+ * targets, and the safe move is to stop pretending it does.
+ *
+ * Three ways in, all of them the same menu: right-click, the ⋮ button (touch
+ * and dropped chips, where it sits *below* the switch target, not on it), and
+ * Shift+F10 / the Menu key on a focused chip.
+ */
+function openChipMenu(session, x, y) {
+  contextMenu(x, y, [
+    { label: `Switch to ${session.label}`, icon: 'arrow-right', onClick: () => hooks.onSwitch(session) },
+    { label: 'Rename / colour…', icon: 'pencil', onClick: () => hooks.onRename(session) },
+    ...(session.status === 'dropped'
+      ? [{ label: 'Reconnect…', icon: 'rotate-cw', onClick: () => hooks.onReconnect(session) },
+         { label: 'Close', icon: 'x', danger: true, onClick: () => hooks.onCloseDropped(session) }]
+      : [{ label: 'Disconnect…', icon: 'log-out', danger: true, onClick: () => hooks.onDisconnect(session) }]),
+  ]);
+}
+
 export function initRail(callbacks) {
   hooks = callbacks;
 
@@ -66,8 +91,11 @@ export function initRail(callbacks) {
     const session = sessionById(btn.closest('.chip').dataset.id);
     if (!session) return;
     if (btn.dataset.act === 'switch') return hooks.onSwitch(session);
-    if (btn.dataset.act === 'close') return hooks.onDisconnect(session);
     if (btn.dataset.act === 'reconnect') return hooks.onReconnect(session);
+    if (btn.dataset.act === 'menu') {
+      const r = btn.getBoundingClientRect();
+      return openChipMenu(session, r.right + 4, r.top);
+    }
   });
 
   // Right-click a chip for the things that do not fit in 56 pixels.
@@ -76,19 +104,21 @@ export function initRail(callbacks) {
     if (!chip) return;
     e.preventDefault();
     const session = sessionById(chip.dataset.id);
-    if (!session) return;
-    contextMenu(e.clientX, e.clientY, [
-      { label: `Switch to ${session.label}`, icon: 'arrow-right', onClick: () => hooks.onSwitch(session) },
-      { label: 'Rename / colour…', icon: 'pencil', onClick: () => hooks.onRename(session) },
-      ...(session.status === 'dropped'
-        ? [{ label: 'Reconnect…', icon: 'rotate-cw', onClick: () => hooks.onReconnect(session) },
-           { label: 'Close', icon: 'x', danger: true, onClick: () => hooks.onCloseDropped(session) }]
-        : [{ label: 'Disconnect…', icon: 'log-out', danger: true, onClick: () => hooks.onDisconnect(session) }]),
-    ]);
+    if (session) openChipMenu(session, e.clientX, e.clientY);
   });
 
   // Left/Right (or Up/Down) move between chips the way a real tab list does.
   list().addEventListener('keydown', (e) => {
+    // The only keyboard route to Disconnect now that the chip has no inline
+    // destructive button: the platform's own "open this thing's menu" keys.
+    if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) {
+      const chip = e.target.closest('.chip');
+      const session = chip && sessionById(chip.dataset.id);
+      if (!session) return;
+      e.preventDefault();
+      const r = chip.getBoundingClientRect();
+      return openChipMenu(session, r.right + 4, r.top + r.height / 2);
+    }
     const keys = { ArrowUp: -1, ArrowLeft: -1, ArrowDown: 1, ArrowRight: 1 };
     if (!(e.key in keys)) return;
     const buttons = [...list().querySelectorAll('.chip__main')];
@@ -141,8 +171,8 @@ export function renderRail() {
           ${s.env ? `<span class="chip__env">${escapeHtml(s.env)}</span>` : ''}
         </button>
         ${s.status === 'dropped'
-          ? `<button type="button" class="chip__act" data-act="reconnect" title="Reconnect ${escapeHtml(s.label)}" aria-label="Reconnect ${escapeHtml(s.label)}">${icon('rotate-cw', { size: 14 })}</button>`
-          : `<button type="button" class="chip__act" data-act="close" title="Disconnect ${escapeHtml(s.label)}" aria-label="Disconnect ${escapeHtml(s.label)}">${icon('log-out', { size: 14 })}</button>`}
+          ? `<button type="button" class="chip__act chip__act--reconnect" data-act="reconnect" title="Reconnect ${escapeHtml(s.label)}" aria-label="Reconnect ${escapeHtml(s.label)}">${icon('rotate-cw', { size: 14 })}</button>`
+          : `<button type="button" class="chip__act chip__act--menu" data-act="menu" title="More for ${escapeHtml(s.label)}" aria-label="More for ${escapeHtml(s.label)} — rename, disconnect" aria-haspopup="menu">${icon('ellipsis-vertical', { size: 14 })}</button>`}
       </div>`;
   }).join('');
 

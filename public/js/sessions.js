@@ -24,20 +24,43 @@ import { toast as rawToast } from './ui.js';
 /* ───────────────────────────────────────────────────────────── identity ── */
 
 /**
- * Eight hues chosen to stay apart for the common colour-vision deficiencies
- * and to clear 3:1 against the dark chrome they sit on. Colour is never the
- * only signal — the label ships with it everywhere — but it is the one that
- * works in peripheral vision and in a screenshot.
+ * Eight host hues, and the one colour that is not in this list.
+ *
+ * Red means production. Nothing else may read as red, so the auto palette
+ * reserves the whole red/pink band (Lab hue 330°–42°) rather than merely
+ * keeping its distance from `PROD_COLOR` — a "close enough" orange handed to an
+ * arbitrary host is exactly how a prod chip stops meaning anything.
+ *
+ * The eight were picked by search rather than by eye, over the in-gamut colours
+ * that clear 3.5:1 on the rail chrome, maximising the smallest CIEDE2000
+ * distance across all 9·8/2 pairs (the eight plus the prod red) under normal
+ * vision *and* under simulated protanopia, deuteranopia and tritanopia:
+ *
+ *   min ΔE2000 between any two, prod included .... 21.5  (blue vs indigo)
+ *   min ΔE2000 from any host colour to the red ... 32.3  (mauve)
+ *   min ΔE2000 protan / deutan / tritan .......... 13.3 / 11.9 / 11.9
+ *   contrast on #1B1719 .......................... 4.55 – 11.4
+ *
+ * For scale: the palette this replaced had #E95420 and #E66100 ΔE2000 6.55
+ * apart — 1.66 under deuteranopia, which is to say the same colour — and handed
+ * that same #E95420 to arbitrary hosts ΔE 17.8 from the production red.
+ *
+ * `npm run check:palette` (tools/check-palette.mjs) re-derives every number
+ * above from this file and fails if the values drift.
+ *
+ * Colour is never the only signal — the label ships with it everywhere — but it
+ * is the one that works in peripheral vision and in a screenshot, so two live
+ * hosts must never be a glance apart.
  */
 export const PALETTE = [
-  '#3584E4', // blue
-  '#26A269', // green
-  '#E95420', // Ubuntu orange
-  '#9141AC', // purple
-  '#2AA1B3', // teal
-  '#F5C211', // yellow
-  '#E66100', // amber
-  '#C061CB', // lilac
+  '#DA800D', // orange
+  '#E7D032', // yellow
+  '#98D28D', // green
+  '#00987E', // teal
+  '#37E5E0', // cyan
+  '#29ADEF', // blue
+  '#5C77F3', // indigo
+  '#AC7BAA', // mauve
 ];
 
 /** Production is not a palette choice. It is always this, and always tagged. */

@@ -152,7 +152,10 @@
            truncated below the host name, and present at 360px. -->
       <span class="topbar__chip" id="topbar-chip">
         <span class="dot dot--live" id="link-dot" role="img" aria-label="Connected"><svg class="icon" width="13" height="13" aria-hidden="true" focusable="false"><use href="/icons/icons.svg#i-circle-dot"></use></svg></span>
-        <span id="topbar-conn">—</span>
+        <!-- Two spans, not one: spec §3.6.3 says the host is the last thing
+             truncated, and a single ellipsised string truncates from the right,
+             which is exactly where the host lives in "user@host". -->
+        <span id="topbar-conn"><span class="conn__lead"></span><span class="conn__host">—</span></span>
         <em class="topbar__env is-hidden" id="topbar-env"></em>
       </span>
       <div class="sysmon is-hidden" id="sysmon" aria-label="System monitor"></div>

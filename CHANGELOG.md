@@ -2,6 +2,65 @@
 
 ## Unreleased
 
+### UI polish (QA M1–M6)
+
+- **Red means production, and the auto palette no longer dilutes it** (M1). The
+  old eight had `#E95420` a short hop from the `#C01C28` production red and
+  handed it to arbitrary hosts. QA measured `#E95420`/`#E66100` at ΔE 11.8 and
+  `#9141AC`/`#C061CB` at 14.6; in CIEDE2000 those two orange are **6.55** apart,
+  and under simulated deuteranopia **1.66** — not "near-indistinguishable" but
+  the same colour. The old palette fails `npm run check:palette` on five counts.
+  The new eight (`#DA800D` `#E7D032` `#98D28D` `#00987E` `#37E5E0` `#29ADEF`
+  `#5C77F3` `#AC7BAA`) were chosen by search, not by eye: the whole red/pink
+  hue band (Lab 330°–42°) is reserved so nothing else can *read* as red, and across all
+  36 pairs including the prod red the minimum separation is ΔE2000 **21.5**,
+  with **32.3** from any host colour to the red, **13.3 / 11.9 / 11.9** under
+  simulated protanopia / deuteranopia / tritanopia, and 4.55–11.4 contrast on
+  the rail chrome. Colour is still never the only signal.
+  New: **`npm run check:palette`** (`tools/check-palette.mjs`, no dependencies)
+  re-derives every one of those numbers from `sessions.js` and fails if they
+  drift — including the hue reservation. It fails on the old palette.
+- **The per-chip disconnect button is gone on pointer devices** (M4). It was
+  26×24px pinned to the chip's bottom-right corner, overlapping the switch
+  target by ~21–24% with a **0px** gap, permanently visible wherever the browser
+  reports no hover, and behind a single confirm — a destructive action sharing
+  edges with the control you press dozens of times an hour. A chip is 60px wide
+  and does not have room for two targets. Disconnect now lives only in the chip
+  menu, reachable three ways: right-click, `Shift+F10` / the Menu key on a
+  focused chip (new), and a non-destructive `⋮` button on touch. What remains
+  inline is a *stacked sibling*, never an overlay: 0% overlap, a real 4px gap
+  (`--chip-act-gap`) and a ≥24px target, all measured from `getBoundingClientRect`
+  and confirmed with `elementFromPoint`.
+- **A dropped session keeps its always-visible Reconnect** — it is not
+  destructive, and a dropped host is unusable until you act on it.
+- **AC19 at 360px: the host survives** (M5). The top-bar label is now two spans
+  with a 999:1 `flex-shrink` ratio, so `user@` is eaten to nothing before the
+  host loses a character (spec §3.6.3) — it used to ellipsise from the right,
+  which is exactly where the host lives. The root cause of the truncation was
+  that the `max-width: 620px` block sat *above* the `.topbar__chip` rule it
+  meant to override and lost on source order alone; it now sits after it, drops
+  the Capture-keys button and the word "Disconnect", and lets the chip take the
+  slack. `.sysmon` yields to the identity chip rather than the other way round.
+- **The `.win__host` rule is stated and asserted** (M5). The host is named in
+  exactly one always-visible place, the top-bar chip. `.win__host` is a second
+  copy for tiled windows: shown above 720px with real width, `display: none` at
+  or below it — never present-but-zero-width.
+- **The narrow rail is sized from the chip stack**, 90px rather than 62px, with
+  a thin scrollbar; at 62px the bottom row of every chip — including a `PROD`
+  tag — was cropped, which no DOM measurement reported.
+- **`Alt+Shift+N` no longer escapes the modal guard** (M6). It used to open the
+  connect form over an open dialog, really establish the SSH session, and then
+  have `activate()` refuse it — leaving a live session to a second host while
+  the top bar, the tab title and the workspace all still showed the old one.
+  The shortcut (and the rail's `+`) is now refused while a modal is open, with a
+  toast saying why; and a session that has just been created is activated
+  unconditionally, because refusing to show it does not undo the connection, it
+  only hides it. There is no longer a state in which a connected session is
+  invisible.
+- **The unsaved-editor close confirm names its host** (M2), like every other
+  destructive confirm: "Discard unsaved changes on `prod-db`?" over
+  "`~/notes.txt` on prod-db (deploy@10.0.0.4)", accented in the session colour.
+
 ### A real icon system
 - **Every emoji and character icon is gone.** The file-type map (📁 📄 🖼️ 📕 🗜️ ⚙️ ❓),
   the window controls (`–` `□` `✕`), the taskbar glyphs, the Files toolbar

@@ -18,7 +18,8 @@
   ],
   "scripts": {
     "start": "node bin/cli.js",
-    "dev": "node --watch bin/cli.js"
+    "dev": "node --watch bin/cli.js",
+    "check:palette": "node tools/check-palette.mjs"
   },
   "keywords": [
     "ssh",
