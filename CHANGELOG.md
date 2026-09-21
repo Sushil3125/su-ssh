@@ -1,6 +1,6 @@
 # Changelog — su-ssh
 
-## Unreleased
+## v0.2.0 — 2026-09-22
 
 ### A passphrase instead of a per-launch link
 
