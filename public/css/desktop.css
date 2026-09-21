@@ -162,6 +162,30 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .greeter__head { margin-bottom: 24px; }
 .access-screen { z-index: 9500; }
 .access-screen .hint { line-height: 1.6; }
+.access-screen .access-why { margin: 0 0 18px; }
+.access-screen code { white-space: nowrap; font-family: var(--font-mono); }
+.access-cancel { margin-top: 8px; }
+.check {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 2px 0 16px;
+  font-size: 13px;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.check input { width: 16px; height: 16px; margin: 0; flex: none; accent-color: var(--orange); }
+.access-links { margin-top: 8px; display: flex; justify-content: center; align-items: center; gap: 8px; flex-wrap: wrap; }
+.linkbtn {
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.linkbtn:hover { color: var(--ink); }
 
 .greeter__head h1 {
   margin: 14px 0 6px;

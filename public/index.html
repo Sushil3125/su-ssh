@@ -19,21 +19,45 @@
 </head>
 <body>
 
-<!-- Shown instead of everything else when the browser lacks this launch's
-     access cookie. Static and inert on purpose: it must render with no API. -->
-<div id="access-screen" class="greeter access-screen is-hidden" role="alertdialog" aria-labelledby="access-title">
+<!-- The passphrase screen: choose one (first run), enter it (every visit
+     without a valid cookie) or change it. Shown instead of everything else
+     until access is settled; static markup so it renders with no API.
+     access.js switches it between its three modes. -->
+<div id="access-screen" class="greeter access-screen is-hidden" role="dialog" aria-modal="true" aria-labelledby="access-title">
   <div class="greeter__glow" aria-hidden="true"></div>
-  <div class="greeter__card">
+  <form id="access-form" class="greeter__card" novalidate>
     <header class="greeter__head">
       <div class="greeter__mark" aria-hidden="true"><span></span><span></span><span></span></div>
-      <h1 id="access-title">Open the access link</h1>
-      <p>This relay only accepts browsers that arrived through the link it printed when it started.</p>
+      <h1 id="access-title">Unlock su-ssh</h1>
+      <p id="access-lede">Enter your passphrase.</p>
     </header>
-    <p class="hint">Look in the terminal where you ran <code>npx su-ssh</code> for a line like
-      <code>http://127.0.0.1:3000/#k=…</code> and open that exact URL. Every restart prints a new one,
-      so a link from an earlier run no longer works.</p>
+    <p id="access-why" class="hint hint--block access-why is-hidden"></p>
+    <div id="access-fields">
+      <label class="field is-hidden" id="access-current-field">
+        <span>Current passphrase</span>
+        <input type="password" id="access-current" autocomplete="current-password">
+      </label>
+      <label class="field">
+        <span id="access-pass-label">Passphrase</span>
+        <input type="password" id="access-pass" autocomplete="current-password" autocapitalize="off" spellcheck="false">
+      </label>
+      <label class="field is-hidden" id="access-confirm-field">
+        <span>Type it again</span>
+        <input type="password" id="access-confirm" autocomplete="new-password" autocapitalize="off" spellcheck="false">
+      </label>
+      <label class="check" id="access-remember-field">
+        <input type="checkbox" id="access-remember" checked>
+        <span>Remember this browser for 30 days</span>
+      </label>
+    </div>
     <p id="access-detail" class="alert is-hidden" role="alert"></p>
-  </div>
+    <button type="submit" class="btn btn--primary btn--full" id="access-btn">
+      <span class="btn__label">Unlock</span>
+      <span class="spinner" aria-hidden="true"></span>
+    </button>
+    <button type="button" class="btn btn--full access-cancel is-hidden" id="access-cancel">Cancel</button>
+    <p class="greeter__foot" id="access-foot"></p>
+  </form>
 </div>
 
 <!-- ─────────────────────────────── greeter ─────────────────────────────── -->
@@ -140,6 +164,11 @@
     </button>
 
     <p class="greeter__foot">Prototype build — bind to localhost and tunnel in. See the README before exposing this.</p>
+    <p class="greeter__foot access-links is-hidden" id="access-links">
+      <button type="button" class="linkbtn" id="access-change-open">Change passphrase</button>
+      <span aria-hidden="true">·</span>
+      <button type="button" class="linkbtn" id="access-lock">Lock this browser</button>
+    </p>
   </form>
 </div>
 

@@ -46,6 +46,9 @@ export function attachWebSockets(server, routes, { authorize = () => null } = {}
     }
 
     wss.handleUpgrade(request, socket, head, (ws) => {
+      // Kept so the relay can close this socket later if the cookie that let it
+      // in stops verifying (passphrase changed or reset, cookie expired).
+      ws.accessCookie = request.headers.cookie || '';
       // Counted here, once, rather than in each endpoint: the idle reaper only
       // needs to know that *some* socket is still attached to the session.
       session.openSockets += 1;

@@ -1,7 +1,7 @@
 /** main.js — greeter, session lifecycle, desktop surface, dock, host rail. */
 
 // First, and with a top-level await inside: nothing below runs until this
-// browser has proved it arrived through the relay's access link.
+// browser has entered the relay's passphrase (or chosen one on first run).
 import './access.js';
 
 import { setTokenRejectedHandler } from './api.js';

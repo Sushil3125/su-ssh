@@ -19,7 +19,7 @@
  * them to httpOnly, Secure, SameSite=Strict cookies.
  */
 
-/** Called when the relay says the access cookie is gone (e.g. it restarted). */
+/** Called when the relay says the access cookie is gone (passphrase changed or reset, cookie expired). */
 let onAccessLost = null;
 export function setAccessLostHandler(fn) { onAccessLost = fn; }
 
@@ -76,7 +76,10 @@ async function request(token, method, url, { body, raw, headers = {} } = {}) {
 /** Calls that are about the relay rather than about one SSH session. */
 export const relayApi = {
   accessStatus: ()    => request(null, 'GET', '/api/access'),
-  redeemAccess: (key) => request(null, 'POST', '/api/access', { body: { key } }),
+  setupAccess: (passphrase, remember) => request(null, 'POST', '/api/access/setup', { body: { passphrase, remember } }),
+  unlockAccess: (passphrase, remember) => request(null, 'POST', '/api/access/unlock', { body: { passphrase, remember } }),
+  changeAccess: (current, passphrase) => request(null, 'POST', '/api/access/change', { body: { current, passphrase } }),
+  lockAccess: ()      => request(null, 'POST', '/api/access/lock'),
   connect: (creds)    => request(null, 'POST', '/api/connect', { body: creds }),
 
   /** Batched liveness check. The relay answers only for the tokens we send. */

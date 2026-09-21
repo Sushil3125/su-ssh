@@ -18,8 +18,12 @@ import express from 'express';
 import { connect, getSession, describeSessions, HttpError, startIdleReaper, MAX_SESSIONS } from './ssh-session.js';
 import {
   buildAllowlist, describeAllowlist, hostGuard, checkRequestOrigin,
-  ConnectLimiter, rateLimitMessage, AccessGate,
+  ConnectLimiter, rateLimitMessage, AccessGate, setupRefusal, isLoopbackAddress,
 } from './security.js';
+import {
+  MIN_LENGTH, authFilePath, checkStrength, setPassphrase, changePassphrase,
+  verifyPassphrase, isOutdated, rehash, loadAuth,
+} from './passphrase.js';
 import { fsRouter } from './routes-fs.js';
 import { createForward, listForwards, removeForward } from './port-forward.js';
 import {
@@ -64,6 +68,9 @@ try {
   ALLOWED = buildAllowlist({ port: PORT, bind: HOST, extra: process.env.ALLOWED_HOSTS || '' });
 } catch (err) { configError(err.message); }
 const limiter = new ConnectLimiter();
+// Separate from the SSH limiter: a mistyped server password must not lock the
+// passphrase screen, nor the other way round.
+const unlockLimiter = new ConnectLimiter();
 const gate = new AccessGate({ enabled: process.env.NO_ACCESS_KEY !== '1', port: PORT, tls: Boolean(TLS_CERT) });
 
 const app = express();
@@ -98,20 +105,116 @@ function readToken(req, _res, next) {
   next();
 }
 
-/* ------------------------------------------------------------- access secret */
+/* --------------------------------------------------------------- passphrase */
 
-// Static assets above stay public so the page can load and explain what is
-// missing. Everything under /api needs the access cookie, except the two calls
-// that obtain it and report whether you have it.
+// Static assets above stay public so the page can load and ask for the
+// passphrase. Everything under /api needs the access cookie, except the calls
+// below that report the state and obtain one.
+
+/** A corrupt auth file is reported, never treated as "no passphrase yet". */
+function authState(res) {
+  try { return { setUp: gate.isSetUp() }; } catch (err) {
+    console.error(`[access] ${err.message}`);
+    res.status(500).json({ error: err.message, code: 'AUTH_FILE_BROKEN' });
+    return null;
+  }
+}
+
+function throttleUnlock(req, res) {
+  const wait = unlockLimiter.take(req.ip);
+  if (!wait) return false;
+  const retryAfter = Math.ceil(wait / 1000);
+  console.warn(`[access] ${req.ip} unlock refused for ${retryAfter}s`);
+  res.set('Retry-After', String(retryAfter)).status(429)
+    .json({ error: rateLimitMessage(wait), code: 'RATE_LIMITED', retryAfter });
+  return true;
+}
+
 app.get('/api/access', (req, res) => {
-  res.json({ required: gate.enabled, granted: gate.allows(req.headers.cookie) });
+  if (!gate.enabled) return res.json({ required: false, granted: true });
+  const state = authState(res);
+  if (!state) return;
+  res.json({
+    required: true,
+    setUp: state.setUp,
+    granted: state.setUp && gate.allows(req.headers.cookie),
+    // Tells the page whether to offer the setup form or explain where to go.
+    setupAllowed: !state.setUp && !setupRefusal(req),
+    minLength: MIN_LENGTH,
+  });
 });
 
-app.post('/api/access', (req, res) => {
-  if (!gate.matches(req.body?.key)) {
-    return res.status(401).json({ error: `That access link is not valid for this relay. ${AccessGate.refusal}`, code: 'ACCESS_REQUIRED' });
-  }
-  res.set('Set-Cookie', gate.cookie()).json({ granted: true });
+app.post('/api/access/setup', async (req, res, next) => {
+  try {
+    if (!gate.enabled) return res.status(404).json({ error: 'Access control is disabled (--no-auth).' });
+    const state = authState(res);
+    if (!state) return;
+    if (state.setUp) return res.status(409).json({ error: 'A passphrase is already set. Enter it to unlock, or run su-ssh --reset-passphrase on the relay machine.', code: 'ALREADY_SET' });
+    const refusal = setupRefusal(req);
+    if (refusal) {
+      console.warn(`[access] setup refused from ${req.socket.remoteAddress}`);
+      return res.status(403).json({ error: refusal, code: 'SETUP_LOOPBACK_ONLY' });
+    }
+    const weak = checkStrength(req.body?.passphrase);
+    if (weak) return res.status(400).json({ error: weak, code: 'WEAK_PASSPHRASE' });
+    try { await setPassphrase(req.body.passphrase); } catch (err) {
+      if (err.code === 'ALREADY_SET') return res.status(409).json({ error: err.message, code: 'ALREADY_SET' });
+      throw err;
+    }
+    console.log(`[access] passphrase chosen; stored as a scrypt hash in ${authFilePath()}`);
+    res.set('Set-Cookie', gate.cookie({ remember: req.body.remember !== false })).json({ granted: true });
+  } catch (err) { next(err); }
+});
+
+app.post('/api/access/unlock', async (req, res, next) => {
+  try {
+    if (!gate.enabled) return res.json({ granted: true });
+    const state = authState(res);
+    if (!state) return;
+    if (!state.setUp) return res.status(409).json({ error: 'No passphrase has been chosen yet. Reload the page.', code: 'NOT_SET' });
+    if (throttleUnlock(req, res)) return;
+    const auth = loadAuth();
+    if (!(await verifyPassphrase(auth.passphrase, req.body?.passphrase))) {
+      unlockLimiter.failure(req.ip);
+      console.warn(`[access] wrong passphrase from ${req.ip}`);
+      return res.status(401).json({ error: 'That passphrase is not right.', code: 'BAD_PASSPHRASE' });
+    }
+    unlockLimiter.success(req.ip);
+    if (isOutdated(auth.passphrase)) {
+      try { await rehash(req.body.passphrase); } catch (err) { console.warn(`[access] could not upgrade the hash: ${err.message}`); }
+    }
+    res.set('Set-Cookie', gate.cookie({ remember: req.body.remember !== false })).json({ granted: true });
+  } catch (err) { next(err); }
+});
+
+/**
+ * Needs both the cookie and the current passphrase: a browser left unlocked
+ * must not be enough to lock the owner out. Rotates the signing key, so every
+ * other browser is logged out; this one gets a fresh cookie.
+ */
+app.post('/api/access/change', async (req, res, next) => {
+  try {
+    if (!gate.enabled) return res.status(404).json({ error: 'Access control is disabled (--no-auth).' });
+    if (!gate.allows(req.headers.cookie)) return res.status(401).json({ error: AccessGate.refusal, code: 'ACCESS_REQUIRED' });
+    if (throttleUnlock(req, res)) return;
+    const auth = loadAuth();
+    if (!(await verifyPassphrase(auth.passphrase, req.body?.current))) {
+      unlockLimiter.failure(req.ip);
+      return res.status(401).json({ error: 'The current passphrase is not right.', code: 'BAD_PASSPHRASE' });
+    }
+    unlockLimiter.success(req.ip);
+    const weak = checkStrength(req.body?.passphrase);
+    if (weak) return res.status(400).json({ error: weak, code: 'WEAK_PASSPHRASE' });
+    await changePassphrase(req.body.passphrase);
+    console.log('[access] passphrase changed; every other browser has been signed out');
+    closeStaleSockets();
+    res.set('Set-Cookie', gate.cookie({ remember: true })).json({ granted: true });
+  } catch (err) { next(err); }
+});
+
+/** Forget the cookie in this browser. */
+app.post('/api/access/lock', (req, res) => {
+  res.set('Set-Cookie', gate.clearCookie()).json({ locked: true });
 });
 
 app.use('/api', gate.middleware());
@@ -458,7 +561,7 @@ const server = TLS_CERT
   : http.createServer(app);
 const scheme = TLS_CERT ? 'https' : 'http';
 
-attachWebSockets(server, {
+const wss = attachWebSockets(server, {
   '/ws/terminal': terminalRoute,
   '/ws/journal': journalRoute,
   '/ws/metrics': metricsRoute,
@@ -469,16 +572,43 @@ attachWebSockets(server, {
     || (gate.allows(request.headers.cookie) ? null : AccessGate.refusal),
 });
 
+/**
+ * The cookie is checked at the WebSocket handshake; a socket already open would
+ * otherwise outlive a passphrase change, a --reset-passphrase or its cookie's
+ * expiry. Sweep them: anything whose handshake cookie no longer verifies is
+ * closed with 4401.
+ */
+function closeStaleSockets() {
+  if (!gate.enabled) return;
+  for (const ws of wss.clients) {
+    if (!gate.allows(ws.accessCookie)) ws.close(4401, 'Access revoked');
+  }
+}
+setInterval(closeStaleSockets, 30_000).unref();
+
 startIdleReaper(IDLE_MINUTES * 60_000);
 
 server.listen(PORT, HOST, () => {
   // A wildcard bind is not something a browser can open; point at loopback.
   const shown = ['0.0.0.0', '::'].includes(HOST) ? '127.0.0.1' : (HOST.includes(':') ? `[${HOST}]` : HOST);
   console.log(`\n  Web desktop relay listening on ${scheme}://${HOST}:${PORT}`);
+  const loopbackBind = isLoopbackAddress(HOST) || HOST === 'localhost';
   if (gate.enabled) {
-    console.log(`\n  Open this link (it carries this launch's access key):\n\n    ${scheme}://${shown}:${PORT}/#k=${gate.secret}\n`);
+    let setUp = false;
+    try { setUp = gate.isSetUp(); } catch (err) { console.error(`\n  ⚠  ${err.message}\n`); }
+    if (setUp) {
+      console.log(`\n  Open ${scheme}://${shown}:${PORT}/ and enter your passphrase.`);
+      console.log('  Forgotten it? Stop the relay and run: su-ssh --reset-passphrase');
+    } else {
+      console.log(`\n  No passphrase yet. Open ${scheme}://127.0.0.1:${PORT}/ in a browser on THIS machine to choose one.`);
+      if (!loopbackBind) {
+        console.warn(`  ⚠  Bound to ${HOST} with no passphrase set: setup is accepted only from this machine`);
+        console.warn('     (loopback), never over the network. Until it is set, remote browsers are refused.');
+      }
+    }
+    console.log(`  Passphrase hash and cookie key (0600): ${authFilePath()}\n`);
   } else {
-    console.warn('  Access key disabled (--no-auth). Anyone who can reach this port can use your ssh-agent and keys;');
+    console.warn('  Access control disabled (--no-auth). Anyone who can reach this port can use your ssh-agent and keys;');
     console.warn('  only do this behind a reverse proxy that authenticates users itself.');
   }
   console.log(`  Bound to ${HOST}. Set BIND=0.0.0.0 to expose it, but read the security notes first.`);

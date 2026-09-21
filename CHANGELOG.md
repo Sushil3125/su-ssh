@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### A passphrase instead of a per-launch link
+
+The request: *"ask the user for passphrase at the beginning which can be
+anything … It should be persistent whether the server is down or the system is
+rebooted."*
+
+- **Choose once, enter it to get in.** First visit shows *Choose a passphrase*
+  (enter + confirm, 8+ characters, no character-class rules). Setup is accepted
+  only from a loopback peer address on the socket, never from a header; a relay
+  bound to a network address with none set says so in its banner.
+- **Stored as a hash.** `~/.config/su-ssh/auth.json` (0600, `SU_SSH_AUTH_FILE`)
+  holds a salted scrypt hash with its parameters and a random cookie-signing
+  key. Nothing reversible to the passphrase.
+- **Survives restarts.** The access cookie is HMAC-signed with the persisted
+  key: 30 days with "Remember this browser" (default), otherwise a session
+  cookie capped at 12 hours. httpOnly, SameSite=Strict, Secure under TLS.
+- **Rate limited** with escalating backoff and an on-screen countdown.
+- **Change passphrase** (link under the connect form) needs the current one and
+  rotates the key, signing out every other browser and closing their open
+  sockets. **Lock this browser** clears the cookie.
+- **`su-ssh --reset-passphrase`** forgets it; the next visit shows setup. Takes
+  effect on a running relay immediately.
+- **Removed:** the `#k=` access link, its banner line and fragment exchange.
+  `--no-auth` / `NO_ACCESS_KEY=1` still disables access control, with its warning.
+
 ### Saved on the relay, not in one browser
 
 The complaint: *"I configured things in browser A, but when I open the same

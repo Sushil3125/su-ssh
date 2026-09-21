@@ -49,8 +49,12 @@ if (has('-h', '--help')) {
                           many idle minutes           (default 15, 0 = never)
         --tls-cert <file> Serve HTTPS with this certificate (PEM)
         --tls-key <file>  ...and this private key (PEM)
-        --no-auth         Do not require the per-launch access link
+        --no-auth         Do not ask for a passphrase at all
                           (only behind an authenticating reverse proxy)
+        --reset-passphrase
+                          Forget the passphrase (and sign out every
+                          browser), then exit. The next visit from this
+                          machine chooses a new one
         --forget-host <host[:port]>
                           Remove the pinned host key for a server, then exit
     -h, --help            Show this message
@@ -60,7 +64,9 @@ if (has('-h', '--help')) {
     Binding to 127.0.0.1 is the default on purpose. Without --tls-cert this
     app accepts SSH credentials over plain HTTP, so use TLS — or reach it with
     'ssh -L 3000:localhost:3000 you@host' — before exposing it to a network.
-    Each launch prints a link carrying a one-time access key; open that link.
+    The first visit, from a browser on this machine, chooses a passphrase
+    (8+ characters, anything goes); later visits ask for it. Only a scrypt
+    hash is stored, in ~/.config/su-ssh/auth.json (SU_SSH_AUTH_FILE).
     Host keys are pinned in ~/.config/su-ssh/known_hosts.json (KNOWN_HOSTS_FILE).
 `);
   process.exit(0);
@@ -100,6 +106,17 @@ if (forget !== undefined) {
   console.log(removed
     ? `  Removed ${removed} pinned key${removed === 1 ? '' : 's'} for ${text} from ${pinFilePath()}.\n  The next connection will ask you to verify the new fingerprint.`
     : `  No pinned key for ${text} in ${pinFilePath()}. If the warning named ~/.ssh/known_hosts, use ssh-keygen -R instead.`);
+  process.exit(0);
+}
+
+// Like --forget-host: recovering a forgotten passphrase needs a shell on the
+// relay machine, never a button in the browser.
+if (has('--reset-passphrase')) {
+  const { resetPassphrase, authFilePath } = await import('../server/passphrase.js');
+  const removed = resetPassphrase();
+  console.log(removed
+    ? `  Removed the passphrase and cookie key at ${authFilePath()}.\n  Every browser is signed out. The next visit from a browser on this machine chooses a new passphrase.`
+    : `  No passphrase is set (${authFilePath()} does not exist). The next visit from this machine chooses one.`);
   process.exit(0);
 }
 

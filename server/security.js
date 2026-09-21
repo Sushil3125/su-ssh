@@ -17,7 +17,8 @@
  *    authentication failure.
  */
 
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import { loadAuth } from './passphrase.js';
 
 /* ============================================================ host allowlist */
 
@@ -199,60 +200,123 @@ export function rateLimitMessage(waitMs) {
   return `Too many sign-in attempts from this address. Wait ${human} before trying again.`;
 }
 
-/* ============================================================ access secret */
+/* ========================================================== access cookie */
 
 /**
- * A per-launch secret, the way Jupyter does it. Binding to localhost keeps the
- * network out, but not other users on the same machine, other processes, or a
- * WSL/Docker port mapping that quietly republishes 127.0.0.1:3000. The secret is
- * printed once in the terminal that started the relay; whoever can read that
- * terminal is the person who is meant to use it.
+ * Access to the relay as a whole is gated on a passphrase the owner chose (see
+ * passphrase.js for how it is stored). Binding to localhost keeps the network
+ * out, but not other users on the same machine, other processes, or a
+ * WSL/Docker port mapping that quietly republishes 127.0.0.1:3000.
  *
- * It rides in the URL *fragment*, which browsers never send to a server, so it
- * does not land in access logs or Referer headers. The page trades it for an
- * httpOnly cookie and strips the fragment. Nothing is written to disk, so a
- * restart revokes every browser that had it.
+ * Proving the passphrase earns a cookie: `v1.<expiry>.<HMAC-SHA256>`, signed
+ * with a random key persisted next to the hash. Signed rather than looked up,
+ * so there is no server-side session table to lose on restart — the owner
+ * types the passphrase to get into the portal, not every time the relay
+ * restarts. It is httpOnly (page scripts never see it), SameSite=Strict (no
+ * other site can make the browser send it) and Secure under TLS.
  *
- * This gates access to the relay as a whole. It is independent of the
- * X-Session-Token, which still selects *which* SSH session a call acts on.
+ * Lifetime: 30 days when "Remember this browser" is ticked (the default: this
+ * is a personal tool, and a month is short enough that a lost laptop's cookie
+ * dies on its own), otherwise a browser-session cookie that the relay also
+ * refuses after 12 hours whatever the browser does with it. The expiry is
+ * inside the signature, so it cannot be extended by editing the cookie.
+ * Changing the passphrase rotates the key and every outstanding cookie stops
+ * verifying at once; --reset-passphrase deletes the key altogether.
+ *
+ * This gates the relay. It is independent of the X-Session-Token, which still
+ * selects *which* SSH session a call acts on.
  */
+
+export const REMEMBER_SECONDS = 30 * 24 * 3600;
+export const SESSION_SECONDS = 12 * 3600;
+
+/** The socket's own peer address, never a header: is it this machine? */
+export function isLoopbackAddress(address) {
+  if (typeof address !== 'string') return false;
+  const a = address.toLowerCase().replace(/^::ffff:/, '');
+  return a === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(a);
+}
+
+/**
+ * First-run setup is accepted only from this machine. The peer address is
+ * what decides; forwarding headers can only *refuse*: a reverse proxy on the
+ * same host makes every visitor look like 127.0.0.1, and its X-Forwarded-For
+ * is the one sign of that we get.
+ */
+export function setupRefusal(req) {
+  const peer = req.socket?.remoteAddress;
+  if (!isLoopbackAddress(peer)) {
+    return `A passphrase can only be chosen from the machine the relay runs on (this request came from ${peer || 'an unknown address'}). `
+      + `Open http://127.0.0.1:${req.socket?.localPort ?? '<port>'}/ in a browser on that machine, or tunnel in with ssh -L, and choose it there.`;
+  }
+  if (req.headers['x-forwarded-for'] || req.headers.forwarded || req.headers['x-real-ip']) {
+    return 'This request came through a proxy, so it cannot prove it is from the relay machine. Choose the passphrase from a browser on that machine directly.';
+  }
+  return null;
+}
 
 export class AccessGate {
   constructor({ enabled = true, port, tls = false } = {}) {
     this.enabled = enabled;
-    this.secret = enabled ? randomBytes(24).toString('base64url') : null;
     // Cookies are not port-scoped, so two relays on one machine would overwrite
     // each other's cookie without the port in its name.
     this.cookieName = `su_ssh_access_${port}`;
     this.tls = tls;
   }
 
-  matches(candidate) {
-    if (!this.enabled) return true;
-    if (typeof candidate !== 'string' || !candidate) return false;
-    const a = Buffer.from(candidate);
-    const b = Buffer.from(this.secret);
+  /** Has a passphrase been chosen? Throws if the auth file is corrupt. */
+  isSetUp() {
+    return Boolean(loadAuth());
+  }
+
+  static sign(key, exp) {
+    return createHmac('sha256', key).update(`su-ssh-access.v1.${exp}`).digest('base64url');
+  }
+
+  /** Verify one cookie value against the current key. */
+  verify(value, now = Date.now()) {
+    if (typeof value !== 'string') return false;
+    const m = value.match(/^v1\.(\d{1,12})\.([A-Za-z0-9_-]{43})$/);
+    if (!m) return false;
+    let auth;
+    try { auth = loadAuth(); } catch { return false; }
+    if (!auth) return false;
+    const exp = Number(m[1]);
+    if (exp * 1000 <= now) return false;
+    const a = Buffer.from(m[2]);
+    const b = Buffer.from(AccessGate.sign(auth.cookieKey, exp));
     return a.length === b.length && timingSafeEqual(a, b);
   }
 
-  /** Does this raw Cookie header carry the secret? */
+  /** Does this raw Cookie header carry a valid access cookie? */
   allows(cookieHeader) {
     if (!this.enabled) return true;
     for (const part of String(cookieHeader || '').split(';')) {
       const at = part.indexOf('=');
       if (at === -1) continue;
-      if (part.slice(0, at).trim() === this.cookieName && this.matches(decodeURIComponent(part.slice(at + 1).trim()))) return true;
+      if (part.slice(0, at).trim() !== this.cookieName) continue;
+      let value;
+      try { value = decodeURIComponent(part.slice(at + 1).trim()); } catch { continue; }
+      if (this.verify(value)) return true;
     }
     return false;
   }
 
-  cookie() {
-    return `${this.cookieName}=${encodeURIComponent(this.secret)}; HttpOnly; SameSite=Strict; Path=/${this.tls ? '; Secure' : ''}`;
+  /** A fresh Set-Cookie value, signed with the key currently on disk. */
+  cookie({ remember = true } = {}, now = Date.now()) {
+    const auth = loadAuth();
+    const seconds = remember ? REMEMBER_SECONDS : SESSION_SECONDS;
+    const exp = Math.floor(now / 1000) + seconds;
+    const value = `v1.${exp}.${AccessGate.sign(auth.cookieKey, exp)}`;
+    return `${this.cookieName}=${value}; HttpOnly; SameSite=Strict; Path=/${remember ? `; Max-Age=${seconds}` : ''}${this.tls ? '; Secure' : ''}`;
+  }
+
+  clearCookie() {
+    return `${this.cookieName}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${this.tls ? '; Secure' : ''}`;
   }
 
   static get refusal() {
-    return 'This relay needs its access link. Open the URL printed in the terminal where su-ssh was started '
-      + '(it ends in #k=…). Restarting the relay issues a new link.';
+    return 'This relay is locked. Reload the page and enter your passphrase.';
   }
 
   /** Express middleware for /api routes. */
