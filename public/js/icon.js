@@ -42,6 +42,9 @@ export const NAMES = new Set([
   'triangle-alert', 'circle-dot', 'circle-minus', 'ban', 'play', 'pause', 'zap', 'loader', 'star',
   'keyboard', 'maximize', 'help-circle', 'log-out', 'check', 'lock', 'unlock', 'clock', 'cpu', 'hard-drive',
   'memory-stick', 'activity', 'app-window', 'eye', 'eye-off',
+  // File viewers (public/js/viewers.js).
+  'file-video', 'file-music', 'file-braces', 'file-spreadsheet', 'file-code', 'zoom-in', 'zoom-out',
+  'rotate-ccw', 'chevron-left', 'scan',
 ]);
 
 /**

@@ -9,6 +9,7 @@ import {
   profileFor, forwardKeyOf, forgetSavedForward, loadProfiles, onProfilesChange,
 } from './profiles.js';
 import { copySelection, pasteFromClipboard, hintOnce } from './keyboard.js';
+import { openFile, openWithItems } from './viewers.js';
 
 const basename = (p) => p.split('/').filter(Boolean).pop() || '/';
 const dirname = (p) => {
@@ -127,16 +128,17 @@ export function openFiles(startPath = '~') {
     count.textContent = `${dirs} folder${dirs === 1 ? '' : 's'}, ${data.entries.length - dirs} file${data.entries.length - dirs === 1 ? '' : 's'}`;
   }
 
+  /** Folders navigate; every file goes through viewers.js openFile(), the one
+   *  place that decides image / PDF / video / … / Editor / hex. */
   function open(entry) {
     if (entry.isDirectory) return go(entry.path);
-    if (entry.kind === 'image') return openViewer(entry.path);
-    if (entry.kind === 'text' || entry.size < 512 * 1024) return openEditor(entry.path);
-    window.open(api.downloadUrl(entry.path), '_blank');
+    return openFile(entry);
   }
 
   function showEntryMenu(x, y, entry) {
     contextMenu(x, y, [
-      { label: entry.isDirectory ? 'Open' : 'Open in editor', onClick: () => open(entry) },
+      { label: 'Open', onClick: () => open(entry) },
+      ...openWithItems(entry),
       { label: 'Download', onClick: () => window.open(api.downloadUrl(entry.path), '_blank') },
       'separator',
       { label: 'Rename…', onClick: () => doRename(entry) },
@@ -642,22 +644,9 @@ function shellQuote(s) {
 
 /* ═════════════════════════════════════════════════════════════ viewer ═══ */
 
-export function openViewer(filePath) {
-  const { api } = requireSession();
-  const win = createWindow({ title: basename(filePath), iconName: 'image', width: 620, height: 480, appId: 'viewer' });
-  win.body.innerHTML = `<div class="viewer"><img alt="${escapeHtml(basename(filePath))}" src="${api.previewUrl(filePath)}"></div>
-    <div class="statusbar"><span>${escapeHtml(filePath)}</span><span data-role="dims">—</span></div>`;
-
-  const img = win.body.querySelector('img');
-  img.addEventListener('load', () => {
-    win.body.querySelector('[data-role="dims"]').textContent = `${img.naturalWidth} × ${img.naturalHeight}`;
-  });
-  img.addEventListener('error', () => {
-    win.body.querySelector('.viewer').innerHTML = '<div class="empty"><strong>Cannot display this image</strong>The file may be corrupt or unreadable.</div>';
-  });
-  win.restore = () => ({ app: 'viewer', path: filePath });
-  return win;
-}
+// The Viewer lives in viewers.js; re-exported so main.js and restore.js keep
+// importing every app from one place.
+export { openViewer } from './viewers.js';
 
 /* ═════════════════════════════════════════════════════ port forwarding ═══ */
 

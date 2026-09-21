@@ -1,0 +1,187 @@
+/* viewers.css — the Viewer app (public/js/viewers.js). Uses desktop.css tokens. */
+
+.vw { display: flex; flex-direction: column; min-height: 0; }
+
+.vw-tbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
+.vw-tools, .vw-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.vw-spacer { flex: 1 1 auto; min-width: 6px; }
+.vw-sep { width: 1px; height: 18px; margin: 0 2px; background: var(--line-strong); }
+.vw-zoom {
+  min-width: 46px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--ink-muted);
+}
+.vw-textbtn span { font-size: 12px; font-variant-numeric: tabular-nums; }
+.vw-actions a.tbar__btn { text-decoration: none; }
+
+.vw-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: #161214;
+  outline: none;
+}
+.vw-status-left { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vw .statusbar > span:last-child { flex: none; font-variant-numeric: tabular-nums; }
+
+/* ---- image ----------------------------------------------------------- */
+
+.vw-body--image { overflow: hidden; }
+.vw-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  /* Checkerboard behind transparency: two conic gradients, no image file. */
+  background-color: #2a2528;
+  background-image: conic-gradient(#352f33 25%, transparent 0 50%, #352f33 0 75%, transparent 0);
+  background-size: 20px 20px;
+}
+.vw-stage.is-dragging { cursor: grabbing; }
+.vw-img {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  max-width: none;
+  transform-origin: center center;
+  image-rendering: auto;
+  user-select: none;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+}
+.vw-stage .empty { position: absolute; inset: 0; display: grid; place-content: center; }
+
+/* ---- pdf / video / audio --------------------------------------------- */
+
+.vw-body--pdf { overflow: hidden; background: #525659; }
+.vw-pdf { display: block; width: 100%; height: 100%; border: 0; background: #525659; }
+
+.vw-body--video { display: grid; place-items: center; background: #000; overflow: hidden; }
+.vw-video { display: block; max-width: 100%; max-height: 100%; width: 100%; height: 100%; background: #000; }
+
+.vw-body--audio { display: grid; place-items: center; padding: 18px; }
+.vw-audio-card {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  width: min(440px, 100%);
+}
+.vw-audio-glyph { color: var(--orange); }
+.vw-audio-name { max-width: 100%; font-size: 13.5px; color: var(--ink); overflow-wrap: anywhere; text-align: center; }
+.vw-audio { width: 100%; }
+
+.vw-dl { display: inline-block; margin-top: 14px; text-decoration: none; }
+
+/* ---- documents: markdown, json, tables, raw, hex ---------------------- */
+
+.vw-body--doc { background: var(--chrome-sink); }
+
+.vw-raw, .vw-hex {
+  margin: 0;
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: pre;
+  tab-size: 4;
+  /* Data, not prose: "<=>" in a hex dump must stay three characters. */
+  font-variant-ligatures: none;
+}
+.vw-raw { white-space: pre-wrap; overflow-wrap: anywhere; }
+.vw-hex { color: #d9d2d6; }
+
+.vw-md {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 18px 26px 40px;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.vw-md h1, .vw-md h2, .vw-md h3, .vw-md h4, .vw-md h5, .vw-md h6 { margin: 1.3em 0 0.5em; line-height: 1.25; font-weight: 500; }
+.vw-md h1 { font-size: 1.7em; padding-bottom: 0.25em; border-bottom: 1px solid var(--line-strong); }
+.vw-md h2 { font-size: 1.35em; padding-bottom: 0.2em; border-bottom: 1px solid var(--line); }
+.vw-md h3 { font-size: 1.15em; }
+.vw-md > :first-child { margin-top: 0; }
+.vw-md p, .vw-md ul, .vw-md ol, .vw-md blockquote, .vw-md pre, .vw-md__table { margin: 0 0 0.9em; }
+.vw-md ul, .vw-md ol { padding-left: 1.6em; }
+.vw-md li + li { margin-top: 0.2em; }
+.vw-md a { color: var(--orange-lift); }
+.vw-md code {
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+.vw-md pre {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  overflow: auto;
+}
+.vw-md pre code { padding: 0; background: none; font-size: 12.5px; }
+.vw-md blockquote { padding: 0.1em 1em; border-left: 3px solid var(--line-strong); color: var(--ink-muted); }
+.vw-md hr { border: 0; border-top: 1px solid var(--line-strong); margin: 1.4em 0; }
+.vw-md__table { overflow-x: auto; }
+.vw-md table { border-collapse: collapse; font-size: 13px; }
+.vw-md th, .vw-md td { padding: 5px 10px; border: 1px solid var(--line-strong); text-align: left; }
+.vw-md th { background: rgba(255, 255, 255, 0.05); font-weight: 500; }
+
+.vw-jsonbar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  gap: 6px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--chrome-sink);
+}
+.vw-json, .vw-md code, .vw-table { font-variant-ligatures: none; }
+.vw-json { padding: 8px 14px 24px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55; color: var(--ink); }
+.vw-json__kids { padding-left: 18px; border-left: 1px solid var(--line); margin-left: 5px; }
+.vw-json__node > summary { cursor: pointer; list-style-position: outside; }
+.vw-json__node > summary::marker { color: var(--ink-muted); }
+.vw-json__row { padding-left: 14px; overflow-wrap: anywhere; }
+.vw-json__key { color: #8cc4ff; }
+.vw-json__string { color: #9fdc9a; }
+.vw-json__number { color: #f5c26b; }
+.vw-json__boolean { color: #f2764a; }
+.vw-json__null { color: var(--ink-muted); font-style: italic; }
+.vw-json__meta { color: var(--ink-muted); }
+.vw-json__more { padding-left: 14px; color: var(--ink-muted); font-style: italic; }
+
+.vw-tablewrap { min-width: 100%; width: max-content; }
+.vw-table { border-collapse: separate; border-spacing: 0; font-size: 12.5px; color: var(--ink); }
+.vw-table th, .vw-table td {
+  max-width: 420px;
+  padding: 5px 10px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.vw-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--chrome-lift);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.vw-table tbody tr:nth-child(even) td { background: rgba(255, 255, 255, 0.025); }
+.vw-table tbody tr:hover td { background: rgba(233, 84, 32, 0.12); }
+.vw-rownum, .vw-num { color: var(--ink-muted); text-align: right !important; font-variant-numeric: tabular-nums; }
+.vw-mono { font-family: var(--font-mono); font-size: 12px; }
+.vw-table--archive { width: 100%; }
+.vw-arch__name { white-space: pre-wrap; }
+.vw-arch__icon { display: inline-flex; vertical-align: -2px; margin-right: 7px; color: var(--ink-muted); }

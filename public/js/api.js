@@ -122,6 +122,10 @@ export function createApi(token) {
     mkdir:  (path)          => req('POST', '/api/fs/mkdir', { body: { path } }),
     rename: (from, to)      => req('POST', '/api/fs/rename', { body: { from, to } }),
     remove: (path)          => req('POST', '/api/fs/delete', { body: { path } }),
+    /** The first `bytes` of a file (the relay caps it at 2 MB), base64 in JSON. */
+    peek:    (path, bytes)  => req('GET', `/api/fs/peek?path=${encodeURIComponent(path)}&bytes=${bytes}`),
+    /** An archive's table of contents, listed on the remote host. Never extracts. */
+    archive: (path)         => req('GET', `/api/fs/archive?path=${encodeURIComponent(path)}`),
 
     forwards:     ()     => req('GET', '/api/forwards'),
     addForward:   (spec) => req('POST', '/api/forwards', { body: spec }),
@@ -144,7 +148,10 @@ export function createApi(token) {
     /** Download and inline-preview URLs carry the token in the query string,
      *  because <img src> and window.open cannot set request headers. */
     downloadUrl: (path) => `/api/fs/download?path=${encodeURIComponent(path)}&token=${t}`,
-    previewUrl:  (path) => `/api/fs/download?inline=1&path=${encodeURIComponent(path)}&token=${t}`,
+    // The trailing file name is cosmetic (the relay ignores it): it is what the
+    // browser's PDF viewer shows as the title and suggests when saving.
+    previewUrl:  (path) => `/api/fs/download/${encodeURIComponent(path.split('/').pop() || 'file')}`
+      + `?inline=1&path=${encodeURIComponent(path)}&token=${t}`,
 
     metricsUrl: (interval) => `${wsBase}/ws/metrics?token=${t}&interval=${interval}`,
     /** `span` is one of the fixed keys journal-ws.js knows (15m/1h/today/boot/
