@@ -62,9 +62,9 @@ const APPS = {
     open: (s) => openEditor(s.path || null),
   },
   viewer: {
-    label: 'Image',
+    label: 'Viewer',
     describe: (s) => s.path,
-    open: (s) => (s.path ? openViewer(s.path) : null),
+    open: (s) => (s.path ? openViewer(s.path, { mode: typeof s.mode === 'string' ? s.mode : null }) : null),
   },
   ports: {
     label: 'Port forwarding',

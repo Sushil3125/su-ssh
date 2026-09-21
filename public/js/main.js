@@ -7,6 +7,7 @@ import './access.js';
 import { setTokenRejectedHandler } from './api.js';
 import { connectWithTrust, presentConnectError, isThrottled } from './host-trust.js';
 import { openFiles, openEditor, openTerminal, openViewer, openForwards } from './apps.js';
+import { openFile, openWithItems } from './viewers.js';
 import {
   createWorkspace, destroyWorkspace, showWorkspace, useWorkspace, closeAll,
   setWorkspaceFrozen, setWindowCountListener, setLayoutChangeListener, escapeHtml,
@@ -856,8 +857,7 @@ async function loadDesktopIcons(session) {
     const open = () => {
       if (activeSession() !== session) return;
       if (entry.isDirectory) openFiles(entry.path);
-      else if (entry.kind === 'image') openViewer(entry.path);
-      else openEditor(entry.path);
+      else openFile(entry);
     };
 
     el.addEventListener('click', () => {
@@ -870,6 +870,7 @@ async function loadDesktopIcons(session) {
       e.preventDefault();
       contextMenu(e.clientX, e.clientY, [
         { label: 'Open', onClick: open },
+        ...openWithItems(entry),
         { label: 'Show in Files', onClick: () => openFiles(entry.isDirectory ? entry.path : source) },
         { label: 'Download', onClick: () => window.open(api.downloadUrl(entry.path), '_blank') },
       ]);

@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+### Viewers: images, PDF, video, audio, Markdown, JSON, CSV, archives, hex
+
+The ask: *"make support for viewing images, and other things that are important
+and isn't complex to implement."* Double-clicking a file now opens the right
+viewer, in Files and on the desktop, and every viewer has Download.
+
+- **Images** — zoom (fit, 100 %, wheel around the cursor, buttons, keys), pan,
+  rotate, previous/next through the folder's images, a checkerboard behind
+  transparency, and dimensions / size / zoom in the status bar. SVG included,
+  shown only through `<img>`.
+- **PDF** — the browser's built-in viewer in an iframe, titled with the real
+  file name; an honest message and a Download link where there is no viewer.
+- **Video and audio** — native `<video>` / `<audio>`, seekable, with a clear
+  message when the browser cannot play a codec.
+- **Markdown** rendered by a small escape-first renderer, **JSON** as a
+  collapsible tree, **CSV/TSV** as a table capped at 1,000 rows — each with
+  **View raw** and **Edit** (opens the Editor).
+- **Archives** — `.zip`, `.tar`, `.tar.gz`/`.tgz`, `.tar.bz2`, `.tar.xz` listed on
+  the server with `unzip -l` / `tar -tv` (`GET /api/fs/archive`). Listing only.
+- **Anything else** — sniffed: text to the Editor, binary to a hex + ASCII view
+  of the first 64 KB. A text file over the Editor's 2 MB limit opens as a
+  read-only preview of its first 2 MB instead of an error.
+- **Open with → Viewer / Editor** in the Files and desktop context menus.
+- **`GET /api/fs/download` supports `Range`**: `206 Partial Content`,
+  `Accept-Ranges`, `Content-Range`, open-ended (`a-`) and suffix (`-n`) ranges,
+  `416` with `bytes */size` past the end, `If-Range` against `Last-Modified`,
+  `HEAD`. Reads start at the offset over SFTP, and the remote read stops when
+  the browser abandons a request (every seek does).
+- **`GET /api/fs/peek`** — the first N bytes of a file, never more than 2 MB.
+- **Security:** every download response carries `Content-Security-Policy:
+  sandbox` and `nosniff`; inline types come from an allowlist and everything
+  else — HTML above all — is an `octet-stream` attachment; SVG is inline only
+  for `Sec-Fetch-Dest: image`. The PDF iframe relies on the response's CSP
+  sandbox because Chromium refuses to run its PDF viewer in a `sandbox`-attribute
+  iframe. See README → *Viewing files safely*.
+- Ten Lucide icons added to the sprite (`file-video`, `file-music`,
+  `file-braces`, `file-spreadsheet`, `file-code`, `zoom-in`, `zoom-out`,
+  `rotate-ccw`, `chevron-left`, `scan`), regenerated with `tools/build-sprite.mjs`.
+- A restored Viewer window comes back in the renderer it was using.
+
 ### Saved on the relay, not in one browser
 
 The complaint: *"I configured things in browser A, but when I open the same

@@ -18,6 +18,7 @@ import { getSession, HttpError } from './ssh-session.js';
 // Reused, not reimplemented: one sudo prefix builder and one sudo-error
 // translator for the whole relay, so a fix to either reaches both editors.
 import { privileged, translateSudo, q } from './services.js';
+import { inlinePolicy, parseRange, SANDBOX_CSP } from './inline-policy.js';
 
 export const fsRouter = express.Router();
 
@@ -115,13 +116,17 @@ const TEXT_EXT = new Set(['txt', 'md', 'json', 'js', 'mjs', 'cjs', 'ts', 'tsx', 
   'yml', 'yaml', 'toml', 'ini', 'conf', 'cfg', 'env', 'log', 'csv', 'tsv', 'sql', 'html', 'htm', 'css', 'scss',
   'xml', 'go', 'rs', 'rb', 'php', 'java', 'c', 'h', 'cpp', 'hpp', 'service', 'gitignore', 'dockerfile', 'lock']);
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif']);
+const VIDEO_EXT = new Set(['mp4', 'm4v', 'webm', 'ogv', 'mov', 'mkv']);
+const AUDIO_EXT = new Set(['mp3', 'wav', 'ogg', 'oga', 'opus', 'flac', 'm4a', 'aac', 'weba']);
 
 function classify(name) {
   const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : name.toLowerCase();
   if (IMAGE_EXT.has(ext)) return 'image';
+  if (VIDEO_EXT.has(ext)) return 'video';
+  if (AUDIO_EXT.has(ext)) return 'audio';
   if (TEXT_EXT.has(ext)) return 'text';
   if (ext === 'pdf') return 'pdf';
-  if (['zip', 'gz', 'tgz', 'bz2', 'xz', 'tar', '7z', 'rar'].includes(ext)) return 'archive';
+  if (['zip', 'gz', 'tgz', 'bz2', 'tbz2', 'xz', 'txz', 'tar', '7z', 'rar', 'jar'].includes(ext)) return 'archive';
   return 'binary';
 }
 
@@ -308,26 +313,228 @@ fsRouter.post('/write', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-/** GET /api/fs/download?path=... — streams bytes straight through */
-fsRouter.get('/download', async (req, res, next) => {
+/**
+ * GET /api/fs/download?path=...[&inline=1] — streams bytes straight through.
+ *
+ * Two jobs, and both matter for the viewers:
+ *
+ * 1. What may render. The Content-Type and disposition come from
+ *    inline-policy.js — an allowlist — and every response, inline or not,
+ *    carries a script-less CSP sandbox and nosniff. See that file for why:
+ *    anything rendered from here renders on the app's own origin.
+ *
+ * 2. Range. <video> and <audio> seek by asking for a byte range; without a 206
+ *    the browser can only play from the start (Chrome will not even let you
+ *    scrub). SFTP reads from an offset natively, so a range costs no more than
+ *    the bytes in it — a seek to minute 40 of a 2 GB file reads from there.
+ *    Supported: `a-b`, `a-` and `-n`, 416 for a range past the end, If-Range
+ *    against Last-Modified. Multi-range requests get the whole file (200),
+ *    which RFC 9110 allows and every media element accepts.
+ *
+ * `/download/<name>` is the same route: the trailing name is ignored (`path`
+ * is authoritative) and exists only so the browser's PDF viewer and media
+ * controls title and save the file by its real name instead of "download".
+ */
+fsRouter.get(['/download', '/download/:name'], async (req, res, next) => {
   try {
     const session = getSession(req.sessionToken);
     const sftp = await session.getSftp();
     const target = await resolvePath(session, req.query.path);
     const stat = await sftpCall(sftp, 'stat', target);
+    if ((stat.mode & 0o170000) === 0o040000) throw new HttpError(400, 'That is a folder, not a file.');
 
-    const inline = req.query.inline === '1';
+    const size = stat.size ?? 0;
     const filename = path.posix.basename(target);
-    res.setHeader('Content-Length', stat.size);
+    const { type, inline } = inlinePolicy(filename, {
+      wantInline: req.query.inline === '1',
+      fetchDest: req.get('Sec-Fetch-Dest') || '',
+    });
+    const lastModified = new Date((stat.mtime ?? 0) * 1000).toUTCString();
+
+    res.setHeader('Content-Security-Policy', SANDBOX_CSP);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Type', type);
     res.setHeader('Content-Disposition',
       `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(filename)}`);
-    res.setHeader('Content-Type', guessMime(filename));
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Last-Modified', lastModified);
+    // The URL carries a session token; keep it out of shared caches.
+    res.setHeader('Cache-Control', 'private, no-cache');
 
-    const stream = sftp.createReadStream(target);
-    stream.on('error', (e) => { if (!res.headersSent) next(e); else res.destroy(); });
+    const ifRange = req.get('If-Range');
+    const range = (ifRange && ifRange !== lastModified) ? null : parseRange(req.get('Range'), size);
+
+    if (range?.unsatisfiable) {
+      res.status(416).setHeader('Content-Range', `bytes */${size}`);
+      return res.end();
+    }
+
+    let start = 0, end = size - 1;
+    if (range) {
+      ({ start, end } = range);
+      res.status(206).setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
+    }
+    res.setHeader('Content-Length', size === 0 ? 0 : end - start + 1);
+    if (req.method === 'HEAD' || size === 0) return res.end();
+
+    // `end` is inclusive in ssh2's read stream, exactly as in a Range header.
+    const stream = sftp.createReadStream(target, { start, end });
+    stream.on('error', (e) => { if (!res.headersSent) next(toHttpError(e, target)); else res.destroy(); });
+    // A <video> abandons a request every time the user seeks; stop reading the
+    // remote file when the browser stops listening, or every scrub leaks a read.
+    res.on('close', () => { if (!res.writableFinished) stream.destroy(); });
     stream.pipe(res);
   } catch (err) { next(err); }
 });
+
+/** Hard cap for /peek: text, JSON, CSV and hex previews never read past this. */
+const MAX_PEEK_BYTES = 2 * 1024 * 1024;   // 2 MB
+
+/**
+ * GET /api/fs/peek?path=...&bytes=N — the first N bytes of a file, never more
+ * than MAX_PEEK_BYTES, whatever its size. This is what keeps a preview of a
+ * 40 GB log from pulling 40 GB through the relay into a browser tab.
+ * Base64 in JSON so the same call serves the text viewers and the hex view.
+ */
+fsRouter.get('/peek', async (req, res, next) => {
+  try {
+    const session = getSession(req.sessionToken);
+    const sftp = await session.getSftp();
+    const target = await resolvePath(session, req.query.path);
+    const stat = await sftpCall(sftp, 'stat', target);
+    if ((stat.mode & 0o170000) === 0o040000) throw new HttpError(400, 'That is a folder, not a file.');
+
+    const asked = Number.parseInt(req.query.bytes, 10);
+    const limit = Math.min(Number.isFinite(asked) && asked > 0 ? asked : 64 * 1024, MAX_PEEK_BYTES);
+    const size = stat.size ?? 0;
+    const want = Math.min(limit, size);
+
+    const chunks = [];
+    if (want > 0) {
+      await new Promise((resolve, reject) => {
+        const stream = sftp.createReadStream(target, { start: 0, end: want - 1 });
+        stream.on('data', (c) => chunks.push(c));
+        stream.on('error', reject);
+        stream.on('close', resolve);
+      });
+    }
+    const buf = Buffer.concat(chunks).subarray(0, want);
+    res.json({
+      path: target,
+      size,
+      mtime: (stat.mtime ?? 0) * 1000,
+      read: buf.length,
+      limit,
+      truncated: size > buf.length,
+      binary: buf.subarray(0, 8192).includes(0),
+      base64: buf.toString('base64'),
+    });
+  } catch (err) { next(err); }
+});
+
+/**
+ * Archive formats we can list, by how the name ends. Longest suffix first so
+ * `x.tar.gz` is never read as a bare `.gz`. The value is the flag GNU tar and
+ * busybox tar both understand; `zip` goes to unzip instead.
+ */
+const ARCHIVES = [
+  ['.tar.gz', '-z'], ['.tgz', '-z'], ['.tar.bz2', '-j'], ['.tbz2', '-j'], ['.tbz', '-j'],
+  ['.tar.xz', '-J'], ['.txz', '-J'], ['.tar', ''], ['.zip', 'zip'], ['.jar', 'zip'],
+];
+const MAX_ARCHIVE_ENTRIES = 5000;
+
+/**
+ * GET /api/fs/archive?path=... — list (never extract) an archive by running
+ * `unzip -l` or `tar -tv` ON THE REMOTE HOST.
+ *
+ * The same discipline as services.js: the path has already been through
+ * realpath and the jail, the command is a fixed string chosen from the table
+ * above by suffix, and the only client-derived value in it — the path — is
+ * single-quoted by q(), so no filename can be read as shell syntax. The output
+ * is capped by `head` so a million-file tarball cannot fill the relay's memory,
+ * and `timeout` (when the host has it) stops a pathological .tar.xz from
+ * holding an SSH channel forever.
+ */
+fsRouter.get('/archive', async (req, res, next) => {
+  try {
+    const session = getSession(req.sessionToken);
+    const target = await resolvePath(session, req.query.path);
+    const lower = target.toLowerCase();
+    const match = ARCHIVES.find(([suffix]) => lower.endsWith(suffix));
+    if (!match) throw new HttpError(400, 'Only .zip, .tar, .tar.gz/.tgz, .tar.bz2 and .tar.xz archives can be listed.');
+    const [, flag] = match;
+    const isZip = flag === 'zip';
+    const tool = isZip ? 'unzip' : 'tar';
+
+    const listCmd = isZip ? `unzip -l ${q(target)}` : `tar -tv${flag ? flag.slice(1) : ''}f ${q(target)}`;
+    const cmd = `command -v ${tool} >/dev/null 2>&1 || { echo "__SU_SSH_NO_TOOL__"; exit 0; }; `
+      + 'T=; command -v timeout >/dev/null 2>&1 && T="timeout 30"; '
+      + `LC_ALL=C $T ${listCmd} 2>&1 | head -n ${MAX_ARCHIVE_ENTRIES + 20}`;
+    const result = await session.exec(cmd);
+    const out = result.stdout;
+    if (out.includes('__SU_SSH_NO_TOOL__')) {
+      throw new HttpError(422, `${tool} is not installed on this server, so the archive cannot be listed here. Download it instead.`);
+    }
+
+    const entries = isZip ? parseUnzip(out) : parseTar(out);
+    if (!entries.length && out.trim() && !/^\s*Archive:/m.test(out)) {
+      throw new HttpError(422, `${tool} could not read this archive: ${out.trim().split('\n').slice(-3).join(' ').slice(0, 300)}`);
+    }
+    res.json({
+      path: target,
+      tool,
+      entries: entries.slice(0, MAX_ARCHIVE_ENTRIES),
+      truncated: entries.length > MAX_ARCHIVE_ENTRIES || out.split('\n').length > MAX_ARCHIVE_ENTRIES + 10,
+    });
+  } catch (err) { next(err); }
+});
+
+/**
+ * `unzip -l`:
+ *   Archive:  x.zip
+ *     Length      Date    Time    Name
+ *   ---------  ---------- -----   ----
+ *         459  2026-09-21 23:43   README.md
+ *   ---------                     -------
+ * The name is the rest of the line, so names with spaces survive.
+ */
+export function parseUnzip(out) {
+  const entries = [];
+  let inBody = false;
+  for (const line of out.split('\n')) {
+    if (/^\s*-{3,}/.test(line)) { if (inBody) break; inBody = true; continue; }
+    if (!inBody) continue;
+    const m = /^\s*(\d+)\s+(\S+)\s+(\S+)\s{2,}(.*)$/.exec(line);
+    if (!m) continue;
+    const name = m[4];
+    entries.push({ name, size: Number(m[1]), date: `${m[2]} ${m[3]}`, isDirectory: name.endsWith('/') });
+  }
+  return entries;
+}
+
+/**
+ * `tar -tv` (GNU):     -rw-r--r-- user/group  459 2026-09-21 23:43 README.md
+ *          (busybox):  -rw-r--r-- user/group  459 2026-09-21 23:43:10 README.md
+ * Symlinks end in ` -> target`, hard links in ` link to target`.
+ */
+export function parseTar(out) {
+  const entries = [];
+  for (const line of out.split('\n')) {
+    const m = /^([-dlhcbps][-rwxsStTl]{9}\S*)\s+(\S+)\s+(\d+)\s+(\d{4}-\d\d-\d\d)\s+(\d\d:\d\d(?::\d\d)?)\s(.*)$/.exec(line);
+    if (!m) continue;
+    let name = m[6];
+    let link = null;
+    if (m[1][0] === 'l') {
+      const i = name.indexOf(' -> ');
+      if (i >= 0) { link = name.slice(i + 4); name = name.slice(0, i); }
+    }
+    entries.push({
+      name, size: Number(m[3]), date: `${m[4]} ${m[5]}`, mode: m[1], owner: m[2],
+      isDirectory: m[1][0] === 'd', link,
+    });
+  }
+  return entries;
+}
 
 /** POST /api/fs/upload?path=/dest/file.bin — raw binary body */
 fsRouter.post('/upload', express.raw({ type: '*/*', limit: MAX_UPLOAD_BYTES }), async (req, res, next) => {
@@ -393,16 +600,6 @@ async function removeRecursive(sftp, target) {
     await removeRecursive(sftp, path.posix.join(target, child.filename));
   }
   return sftpCall(sftp, 'rmdir', target);
-}
-
-function guessMime(name) {
-  const ext = name.split('.').pop().toLowerCase();
-  return {
-    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
-    webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon',
-    avif: 'image/avif', pdf: 'application/pdf', json: 'application/json',
-    txt: 'text/plain; charset=utf-8', md: 'text/plain; charset=utf-8',
-  }[ext] || 'application/octet-stream';
 }
 
 function formatBytes(n) {

@@ -284,6 +284,8 @@ export const GLYPH = {
   directory: { name: 'folder' },
   text:      { name: 'file-text' },
   image:     { name: 'image' },
+  video:     { name: 'file-video' },
+  audio:     { name: 'file-music' },
   pdf:       { name: 'file-text', className: 'icon--bad' },
   archive:   { name: 'file-archive' },
   binary:    { name: 'binary' },
@@ -291,8 +293,16 @@ export const GLYPH = {
   broken:    { name: 'file-question', className: 'icon--warn' },
 };
 
+/** Text files the viewers render as something richer get a glyph that says so. */
+const TEXT_GLYPH = { json: 'file-braces', csv: 'file-spreadsheet', tsv: 'file-spreadsheet' };
+function byExtension(entry) {
+  if (entry.kind !== 'text') return null;
+  const ext = String(entry.name || '').split('.').pop().toLowerCase();
+  return TEXT_GLYPH[ext] ? { name: TEXT_GLYPH[ext] } : null;
+}
+
 /** The icon markup for a directory entry, at `size` px. */
 export function fileIcon(entry, size = 30) {
-  const g = (entry.broken && GLYPH.broken) || GLYPH[entry.kind] || GLYPH.binary;
+  const g = (entry.broken && GLYPH.broken) || byExtension(entry) || GLYPH[entry.kind] || GLYPH.binary;
   return icon(g.name, { size, className: g.className || '' });
 }

@@ -141,6 +141,8 @@ function sanitiseWindow(input) {
     ...(input.unit !== undefined ? { unit: str(input.unit, 255) || null } : {}),
     ...(input.scope !== undefined ? { scope: input.scope === 'user' ? 'user' : 'system' } : {}),
     ...(input.tab !== undefined ? { tab: str(input.tab, 32) || null } : {}),
+    // Which renderer a Viewer window was using (image, markdown, hex, …).
+    ...(input.mode !== undefined ? { mode: /^[a-z]{1,16}$/.test(str(input.mode, 16)) ? str(input.mode, 16) : null } : {}),
     geo: {
       left: num(g.left, 0), top: num(g.top, 0),
       width: num(g.width, 720), height: num(g.height, 460),
