@@ -71,6 +71,7 @@ Options
                         idle minutes                 (default 15, 0 = never)
       --tls-cert <file> / --tls-key <file>
                         Serve HTTPS instead of HTTP
+  -f, --foreground      Run attached instead of in the background
       --no-auth         Do not ask for a passphrase (authenticating proxy only)
       --reset-passphrase
                         Forget the passphrase and sign out every browser, then exit
@@ -101,6 +102,62 @@ Reaching it from another machine — do this rather than setting `BIND=0.0.0.0`:
 ```bash
 ssh -L 3000:localhost:3000 you@your-server
 ```
+
+---
+
+## Running in the background and at startup
+
+`su-ssh` starts the relay **in the background** and gives you the prompt back
+once it is listening (it prints the URL, the PID, where the log is, and — on
+first run — where to choose your passphrase). Use `su-ssh --foreground` (`-f`)
+to run attached as before.
+
+```bash
+su-ssh --port 8080     # start detached (same as: su-ssh start --port 8080)
+su-ssh status          # running? PID, URL, uptime, log; exit 0 running, 3 not
+su-ssh logs -f         # follow the log (-n 200 for more history)
+su-ssh restart         # reuses the flags it was started with, unless you give new ones
+su-ssh stop            # SIGTERM, SIGKILL after 5 s
+```
+
+One managed instance per user: running `su-ssh` while one is up shows its
+status instead of starting a second. State lives in
+`$XDG_STATE_HOME/su-ssh/` (default `~/.local/state/su-ssh/`, mode 0700):
+`su-ssh.pid` (PID, port, flags) and `su-ssh.log` (rotated at 5 MB when the relay
+starts, one old copy as `su-ssh.log.1`). A pidfile whose process has died, or
+whose PID now belongs to something else, is noticed and removed.
+
+**Start automatically:**
+
+```bash
+npm install -g su-ssh          # enable refuses to run from npx's cache (see below)
+su-ssh enable --port 8080      # flags are baked into the service
+su-ssh disable                 # stop and remove it
+```
+
+- **Linux / WSL with systemd:** writes a user unit
+  `~/.config/systemd/user/su-ssh.service` (`Restart=on-failure`) and runs
+  `systemctl --user enable --now su-ssh`. A detached relay is stopped first so
+  the port is free. A user service starts when you log in; to start it **at
+  boot, before anyone logs in**, run once `sudo loginctl enable-linger $USER`
+  (su-ssh prints this and never runs sudo itself). Logs go to the journal:
+  `su-ssh logs -f` runs `journalctl --user -u su-ssh -f`. While the service is
+  installed, `start`/`stop`/`restart` act through `systemctl --user`.
+- **WSL without systemd:** `enable` explains how to turn it on
+  (`[boot]` / `systemd=true` in `/etc/wsl.conf`, then `wsl --shutdown`).
+- **macOS:** installs a LaunchAgent (`~/Library/LaunchAgents/`, `RunAtLoad` +
+  `KeepAlive`, log in `~/Library/Logs/su-ssh.log`) via `launchctl bootstrap`.
+  **Untested** — reports welcome.
+- **Native Windows / no service manager:** refused with the manual alternative
+  (run `su-ssh --foreground` from your own init system or Task Scheduler).
+- **npx:** `npx su-ssh enable` is refused, because npx's cache directory can be
+  wiped or replaced at any time and the service would stop working at the next
+  boot. Install globally first.
+
+Environment the relay reads (`SU_SSH_AUTH_FILE`, `BIND`, …) is copied into the
+service when you run `enable`; relative `--jail`/`--tls-*` paths are made
+absolute. Tests can redirect state with `SU_SSH_STATE_DIR` and the unit name
+with `SU_SSH_SERVICE_NAME`.
 
 ---
 

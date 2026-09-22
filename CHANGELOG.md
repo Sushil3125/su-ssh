@@ -13,6 +13,28 @@
   match the reader's theme. The original artwork lives in `su-ssh-logo/`; it is
   not shipped in the npm package.
 
+### Runs in the background by default, and can start at login/boot
+
+- `su-ssh` now starts the relay detached and returns to the prompt once it is
+  actually listening, printing the URL, PID, log path and the passphrase
+  set-up instructions. If it fails to start (port taken, bad TLS file…) the
+  last log lines are shown and the exit code is non-zero.
+- `--foreground` / `-f` runs attached exactly as before (debugging, containers,
+  service managers).
+- New commands: `start`, `stop`, `restart`, `status` (exit 0 running / 3 not),
+  `logs [-f] [-n N]`, `enable`, `disable`. One managed instance per user; a
+  second `su-ssh` shows the running one's status. Stale pidfiles (process gone,
+  or PID reused by something else) are detected and removed.
+- State in `$XDG_STATE_HOME/su-ssh/` (`~/.local/state/su-ssh/`, 0700):
+  `su-ssh.pid`, `su-ssh.log` (rotated at 5 MB on start, one old copy).
+- `su-ssh enable [flags]` installs a systemd user service (Linux, WSL with
+  systemd) or a LaunchAgent (macOS, untested); `disable` removes it. When a
+  service owns the relay, `stop`/`start`/`restart`/`logs` go through it.
+  WSL without systemd, native Windows and npx's cache are refused with an
+  explanation of what to do instead. su-ssh never runs sudo; it prints
+  `loginctl enable-linger` for boot-before-login.
+- A port already in use is now reported in one line instead of a stack trace.
+
 ## v0.2.0 — 2026-09-22
 
 ### A passphrase instead of a per-launch link

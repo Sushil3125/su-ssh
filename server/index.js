@@ -588,6 +588,12 @@ setInterval(closeStaleSockets, 30_000).unref();
 
 startIdleReaper(IDLE_MINUTES * 60_000);
 
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') configError(`Port ${PORT} on ${HOST} is already in use. Pick another with --port, or stop what is using it (su-ssh status shows a background relay).`);
+  if (err.code === 'EACCES') configError(`Not allowed to listen on ${HOST}:${PORT} (ports below 1024 need privileges).`);
+  configError(`Cannot listen on ${HOST}:${PORT}: ${err.message}`);
+});
+
 server.listen(PORT, HOST, () => {
   // A wildcard bind is not something a browser can open; point at loopback.
   const shown = ['0.0.0.0', '::'].includes(HOST) ? '127.0.0.1' : (HOST.includes(':') ? `[${HOST}]` : HOST);

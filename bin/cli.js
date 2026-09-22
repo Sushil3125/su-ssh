@@ -33,7 +33,25 @@ if (has('-h', '--help')) {
   ${pkg.description}
 
   Usage
-    npx ${pkg.name} [options]
+    ${pkg.name} [start] [options]   Start the relay in the background and return
+    ${pkg.name} --foreground [options]
+                                Run attached to this terminal (-f); what service
+                                managers and containers should run
+    ${pkg.name} stop            Stop it (SIGTERM, then SIGKILL after 5s)
+    ${pkg.name} restart [options]
+                                Stop and start; without options, reuses the old ones
+    ${pkg.name} status          Running? PID, URL, uptime, log, boot-start
+                                (exit 0 running, 3 not running)
+    ${pkg.name} logs [-f] [-n N]
+                                Show the last N (50) log lines; -f follows
+    ${pkg.name} enable [options]
+                                Start at login/boot: systemd user service (Linux,
+                                WSL with systemd) or LaunchAgent (macOS, untested)
+    ${pkg.name} disable         Stop and remove that service
+
+    One managed instance per user. A second 'su-ssh' while one runs just shows
+    its status. When the relay is a systemd/launchd service, stop/start/restart/
+    logs act through that manager.
 
   Options
     -p, --port <port>     Port to listen on                    (default 3000)
@@ -49,6 +67,7 @@ if (has('-h', '--help')) {
                           many idle minutes           (default 15, 0 = never)
         --tls-cert <file> Serve HTTPS with this certificate (PEM)
         --tls-key <file>  ...and this private key (PEM)
+    -f, --foreground      Run attached instead of in the background
         --no-auth         Do not ask for a passphrase at all
                           (only behind an authenticating reverse proxy)
         --reset-passphrase
@@ -68,6 +87,11 @@ if (has('-h', '--help')) {
     (8+ characters, anything goes); later visits ask for it. Only a scrypt
     hash is stored, in ~/.config/su-ssh/auth.json (SU_SSH_AUTH_FILE).
     Host keys are pinned in ~/.config/su-ssh/known_hosts.json (KNOWN_HOSTS_FILE).
+    Background state: ~/.local/state/su-ssh/ (XDG_STATE_HOME): su-ssh.pid and
+    su-ssh.log (rotated at 5 MB on start, one old copy kept).
+    'enable' needs a real install (npm install -g su-ssh), not npx's cache.
+    A systemd user service starts at login; to start at boot before anyone logs
+    in, run once: sudo loginctl enable-linger $USER
 `);
   process.exit(0);
 }
@@ -118,6 +142,15 @@ if (has('--reset-passphrase')) {
     ? `  Removed the passphrase and cookie key at ${authFilePath()}.\n  Every browser is signed out. The next visit from a browser on this machine chooses a new passphrase.`
     : `  No passphrase is set (${authFilePath()} does not exist). The next visit from this machine chooses one.`);
   process.exit(0);
+}
+
+// Everything below either runs the relay attached (--foreground: debugging,
+// containers, service managers) or hands off to the daemon commands.
+const { parseArgs, runCommand } = await import('./daemon.js');
+let parsed;
+try { parsed = parseArgs(argv); } catch (err) { console.error(`  ${err.message}`); process.exit(2); }
+if (!parsed.foreground) {
+  process.exit(await runCommand(parsed.command, parsed.args));
 }
 
 const port = flag(['-p', '--port'], process.env.PORT);
