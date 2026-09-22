@@ -1,5 +1,18 @@
 # Changelog — su-ssh
 
+## Unreleased
+
+### The su-ssh logo
+- The `su` monogram is now the favicon (SVG, with a 32px PNG fallback), the
+  Apple touch icon, the installed-app icon, and the mark on the passphrase and
+  connect screens and at the left of the top bar. It replaces the placeholder
+  circle and the dotted Ubuntu-style mark.
+- A maskable variant for installed-app icons: Android crops them to a circle,
+  which would have clipped the underline on the regular mark.
+- The README opens with the logo lockup, switching between light and dark to
+  match the reader's theme. The original artwork lives in `su-ssh-logo/`; it is
+  not shipped in the npm package.
+
 ## v0.2.0 — 2026-09-22
 
 ### A passphrase instead of a per-launch link

@@ -10,7 +10,8 @@
   "theme_color": "#240018",
   "prefer_related_applications": false,
   "icons": [
-    { "src": "/icons/su-ssh.svg", "sizes": "any", "type": "image/svg+xml" },
-    { "src": "/icons/su-ssh-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
   ]
 }

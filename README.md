@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Sushil3125/su-ssh/main/su-ssh-logo/SuSSH_Logo_SuMonogram_Lockup_Dark_v2_0_20260922.svg">
+    <img alt="su-ssh" src="https://raw.githubusercontent.com/Sushil3125/su-ssh/main/su-ssh-logo/SuSSH_Logo_SuMonogram_Lockup_Light_v2_0_20260922.svg" width="320">
+  </picture>
+</p>
+
 # su-ssh
 
 A browser desktop for any Linux server, over nothing but SSH.

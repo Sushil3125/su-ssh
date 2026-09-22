@@ -203,25 +203,21 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 
 /* Three dots in a ring — the Ubuntu circle-of-friends, abstracted. */
 .greeter__mark {
-  position: relative;
-  width: 34px;
-  height: 34px;
-  border: 2px solid var(--orange);
-  border-radius: 50%;
+  display: block;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  /* The mark carries its own light tile; a hairline keeps its edge from
+     dissolving into the pale greeter card. */
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.25);
 }
-.greeter__mark span {
-  position: absolute;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--orange);
-  top: 50%;
-  left: 50%;
-  margin: -4.5px;
+.topbar__logo {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 4px;
+  margin-right: 2px;
 }
-.greeter__mark span:nth-child(1) { transform: translate(0, -15px); }
-.greeter__mark span:nth-child(2) { transform: translate(13px, 8px); }
-.greeter__mark span:nth-child(3) { transform: translate(-13px, 8px); }
 
 .field { display: block; margin-bottom: 14px; border: 0; padding: 0; }
 .field > span,

@@ -16,7 +16,9 @@
      Ctrl+W reaches the terminal. There is deliberately NO service worker —
      see README "Keyboard" for why a stale cache is unacceptable here. -->
 <link rel="manifest" href="/manifest.webmanifest">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23E95420'/></svg>">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<link rel="apple-touch-icon" href="/icon-512.png">
 </head>
 <body>
 
@@ -28,7 +30,7 @@
   <div class="greeter__glow" aria-hidden="true"></div>
   <form id="access-form" class="greeter__card" novalidate>
     <header class="greeter__head">
-      <div class="greeter__mark" aria-hidden="true"><span></span><span></span><span></span></div>
+      <img class="greeter__mark" src="/favicon.svg" alt="" width="44" height="44">
       <h1 id="access-title">Unlock su-ssh</h1>
       <p id="access-lede">Enter your passphrase.</p>
     </header>
@@ -67,7 +69,7 @@
 
   <form id="connect-form" class="greeter__card" autocomplete="off">
     <header class="greeter__head">
-      <div class="greeter__mark" aria-hidden="true"><span></span><span></span><span></span></div>
+      <img class="greeter__mark" src="/favicon.svg" alt="" width="44" height="44">
       <!-- Only shown when the greeter is an overlay over a live desktop: on the
            front door there is nothing behind it to go back to. -->
       <button type="button" class="greeter__cancel is-hidden" id="greeter-cancel"
@@ -178,6 +180,7 @@
 
   <div class="topbar">
     <div class="topbar__left">
+      <img class="topbar__logo" src="/favicon.svg" alt="su-ssh" width="18" height="18">
       <!-- Identity chip: colour, label and (when set) environment tag. Never
            truncated below the host name, and present at 360px. -->
       <span class="topbar__chip" id="topbar-chip">
