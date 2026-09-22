@@ -1,6 +1,10 @@
 # Changelog — su-ssh
 
-## Unreleased
+## v0.2.1 — 2026-09-22
+
+> **Behaviour change:** `su-ssh` on its own now starts the relay in the
+> background and returns to the prompt. Scripts or containers that relied on
+> it staying in the foreground should run `su-ssh --foreground`.
 
 ### The su-ssh logo
 - The `su` monogram is now the favicon (SVG, with a 32px PNG fallback), the

@@ -1,6 +1,6 @@
 {
   "name": "su-ssh",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A browser desktop for any Linux server, over nothing but SSH: files, terminal, editor, systemd services with live logs, port forwarding, and live CPU/memory/disk/latency meters.",
   "type": "module",
   "main": "server/index.js",
