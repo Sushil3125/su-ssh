@@ -14,6 +14,10 @@ forwarding, and live CPU/memory/disk/latency meters — all read and driven over
 single SSH connection. Nothing is mirrored, synced or cached on the machine
 running the relay.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Sushil3125/su-ssh/main/docs/screenshots/hero.png" alt="su-ssh desktop: a host rail with homelab-01 and a production-tagged prod-db, a per-host overview card, the file manager, a terminal and the Services app showing cron.service" width="100%">
+</p>
+
 ```bash
 npx su-ssh
 # → http://127.0.0.1:3000
@@ -46,6 +50,23 @@ asks for it; restarts and reboots do not. Forgot it? `npx su-ssh --reset-passphr
 - **Several servers at once** — a host rail beside the dock holds up to eight live
   connections in one tab, each with its own windows, colour and label; switching
   closes no socket and loses no unsaved buffer
+
+
+### Screenshots
+
+Open anything from the file manager: Markdown renders, images zoom and page
+through the folder, CSV becomes a table, and archives list without extracting.
+
+<img src="https://raw.githubusercontent.com/Sushil3125/su-ssh/main/docs/screenshots/viewers.png" alt="Rendered Markdown with a table, an image viewer at 34% zoom with folder navigation, a CSV shown as a table, and the file manager" width="100%">
+
+Hosts tagged production make you type the host name before a destructive
+action, and every confirmation says which machine it will hit.
+
+<img src="https://raw.githubusercontent.com/Sushil3125/su-ssh/main/docs/screenshots/prod-safety.png" alt="A confirm dialog reading 'Stop cron.service on prod-db?' that requires typing the host name to confirm" width="100%">
+
+<sub>Screenshots are from a demo session: the host names, home directory and
+files are staged, and the services and logs are real.</sub>
+
 
 ---
 
